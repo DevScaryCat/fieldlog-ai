@@ -2,11 +2,26 @@
 
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <h1 className="text-4xl font-bold">FieldLog AI</h1>
-      <p className="mt-2 text-lg text-gray-600 dark:text-gray-300">
-        AI 기반 위험성 평가 보고서 자동화 솔루션
-      </p>
+    <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden p-24">
+      {/* Vercel-style Spectrum Gradient */}
+      <div className="absolute inset-0 z-0">
+        <div
+          className="absolute left-1/2 top-1/2 h-[800px] w-[800px] -translate-x-1/2 -translate-y-1/2 rounded-full
+          bg-[conic-gradient(from_0deg_at_50%_50%,#00c4ff_0%,#00ff95_25%,#fffb00_50%,#ff0000_75%,#00c4ff_100%)]
+          opacity-20 blur-3xl"
+        />
+      </div>
+
+      {/* Content (Above the gradient) */}
+      <div className="z-10 flex flex-col items-center">
+        <h1 className=" text-center text-5xl font-extrabold ">
+          FieldLog AI
+        </h1>
+        <p className="mt-4 max-w-lg text-center text-lg text-slate-300">
+          AI 기반 위험성 평가 보고서 자동화 솔루션. 현장의 목소리가
+          보고서가 됩니다.
+        </p>
+      </div>
     </main>
   );
 }

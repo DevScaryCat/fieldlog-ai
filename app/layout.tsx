@@ -3,7 +3,7 @@
 import type { Metadata } from 'next';
 import localFont from 'next/font/local';
 import './globals.css';
-
+import { ThemeProvider } from './components/components/theme-provider';
 const pretendard = localFont({
   src: [
     {
@@ -42,7 +42,7 @@ const pretendard = localFont({
       style: 'normal',
     },
     {
-      path: '../public/fonts/Pretendard-ExtraBold.woff',
+      path: '../public/fonts/Pretendard-ExtraLight.woff',
       weight: '800',
       style: 'normal',
     },
@@ -67,11 +67,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="ko" className={pretendard.variable}>
+    <html lang="ko" className={pretendard.variable} suppressHydrationWarning>
       <body
-        className={`font-sans antialiased bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100`}
+        className={`font-sans antialiased 
+          bg-white text-slate-900 
+          dark:bg-slate-950 dark:text-slate-100`}
       >
-        {children}
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem={false}
+        >
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );
