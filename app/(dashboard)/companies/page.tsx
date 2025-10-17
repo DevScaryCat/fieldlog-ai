@@ -1,5 +1,6 @@
 // /app/(dashboard)/companies/page.tsx
 
+import { StartAssessmentButton } from '@/app/components/StartAssessmentButton';
 import { createServer } from '@/lib/supabaseServer';
 import { Plus } from 'lucide-react';
 import Link from 'next/link';
@@ -39,12 +40,17 @@ export default async function CompaniesPage() {
                                         {company.address || '주소 정보 없음'}
                                     </p>
                                 </div>
-                                <Link
-                                    href={`/companies/${company.id}/edit`}
-                                    className="text-sm text-indigo-400 hover:text-indigo-300"
-                                >
-                                    수정
-                                </Link>
+                                {/* 2. 수정/시작 버튼 그룹 */}
+                                <div className="flex items-center gap-4">
+                                    <Link
+                                        href={`/companies/${company.id}/edit`}
+                                        className="text-sm text-indigo-400 hover:text-indigo-300"
+                                    >
+                                        수정
+                                    </Link>
+                                    {/* 3. 버튼 컴포넌트 추가 */}
+                                    <StartAssessmentButton companyId={company.id} />
+                                </div>
                             </li>
                         ))
                     ) : (
