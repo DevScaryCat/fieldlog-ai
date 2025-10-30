@@ -2,20 +2,17 @@
 
 'use client';
 
-// 변경: 새로운 클라이언트 유틸리티 함수를 임포트합니다.
 import { createClient } from '@/utils/supabase/client';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Home, LayoutDashboard, Building, FileText, LogOut } from 'lucide-react';
+import { Home, LayoutDashboard, Building, FileText, LogOut, FileScan } from 'lucide-react'; // 1. FileScan 아이콘 추가
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-// import { usePathname } from 'next/navigation'; // 활성 메뉴 스타일링에 필요
+// import { usePathname } from 'next/navigation';
 
 export function Sidebar() {
     const router = useRouter();
-    // pathname = usePathname(); // 활성 메뉴 스타일링에 필요
-
-    // 변경: 클라이언트를 함수 호출 방식으로 생성합니다.
+    // const pathname = usePathname();
     const supabase = createClient();
 
     const handleLogout = async () => {
@@ -28,10 +25,12 @@ export function Sidebar() {
         { href: '/', label: '대시보드', icon: LayoutDashboard },
         { href: '/assessments', label: '평가 관리', icon: FileText },
         { href: '/companies', label: '사업장 관리', icon: Building },
+        // 2. '양식 관리' 메뉴 추가
+        { href: '/templates', label: '양식 관리', icon: FileScan },
     ];
 
     return (
-        <aside className="sticky top-0 h-screen w-64 flex flex-col border-r bg-background p-4">
+        <aside className="sticky top-0 h-screen w-64 flex-col border-r bg-background p-4 flex">
             <div className="mb-8 flex items-center gap-3 p-2">
                 <div className="rounded-lg bg-primary p-2">
                     <Home className="text-primary-foreground" />
@@ -46,7 +45,7 @@ export function Sidebar() {
                             <Link
                                 href={item.href}
                                 className={cn(
-                                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
+                                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
                                     // pathname === item.href ? 'bg-accent text-accent-foreground' : ''
                                 )}
                             >

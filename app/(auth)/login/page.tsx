@@ -3,7 +3,8 @@
 'use client';
 
 import { useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+// 1. Import 경로를 새로운 유틸리티 함수로 변경합니다.
+import { createClient } from '@/utils/supabase/client';
 import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +25,9 @@ export default function LoginPage() {
     const [error, setError] = useState<string | null>(null);
     const [isSignUp, setIsSignUp] = useState(false);
     const router = useRouter();
+
+    // 2. 클라이언트 생성 함수를 호출합니다.
+    const supabase = createClient();
 
     const handleAuth = async (event: React.FormEvent) => {
         event.preventDefault();
@@ -48,11 +52,8 @@ export default function LoginPage() {
                     password,
                 });
                 if (signInError) throw signInError;
-                // --- 이 부분이 추가되었습니다 ---
-                // 로그인 성공 시 메인 페이지로 즉시 이동
                 router.push('/');
-                router.refresh(); // 서버 상태도 갱신하여 최신 데이터 로드
-                // -----------------------------
+                router.refresh();
             }
         } catch (err: any) {
             console.error('Authentication error:', err);
