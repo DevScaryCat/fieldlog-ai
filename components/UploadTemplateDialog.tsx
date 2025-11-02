@@ -14,6 +14,7 @@ import {
     DialogTitle,
     DialogTrigger,
     DialogFooter,
+    DialogClose,
 } from "@/components/ui/dialog";
 import {
     Select,
@@ -26,26 +27,51 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlusCircle, UploadCloud, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { v4 as uuidv4 } from 'uuid'; // 파일명 중복 방지
+import { v4 as uuidv4 } from 'uuid';
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import * as z from "zod";
+import {
+    Form,
+    FormControl,
+    FormField,
+    FormItem,
+    FormLabel,
+    FormMessage,
+} from "@/components/ui/form";
+import imageCompression from 'browser-image-compression'; // 1. 이미지 압축 라이브러리 임포트
 
-// Supabase 'companies' 테이블 타입 (간단하게)
 type Company = {
     id: string;
     name: string;
 };
 
+// 2. Zod 스키마 수정: 파일 타입 검사를 더 관대하게 (File 객체인지 여부만 확인)
+const formSchema = z.object({
+    templateName: z.string().min(2, {
+        message: "양식 이름은 2글자 이상이어야 합니다.",
+    }),
+    companyId: z.string({
+        required_error: "연결할 사업장을 선택해야 합니다.",
+    }),
+    file: z.instanceof(File).refine(
+        (file) => file.size > 0, "파일을 선택해야 합니다."
+    ),
+});
+
 export default function UploadTemplateDialog() {
     const [open, setOpen] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
     const [companies, setCompanies] = useState<Company[]>([]);
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
-    const [templateName, setTemplateName] = useState('');
-    const [selectedCompanyId, setSelectedCompanyId] = useState<string | undefined>(undefined);
-
     const router = useRouter();
     const supabase = createClient();
 
-    // 1. 팝업이 열릴 때 사업장 목록을 불러옵니다.
+    const form = useForm<z.infer<typeof formSchema>>({
+        resolver: zodResolver(formSchema),
+        defaultValues: {
+            templateName: "",
+        },
+    });
+
     useEffect(() => {
         if (open) {
             const fetchCompanies = async () => {
@@ -57,64 +83,90 @@ export default function UploadTemplateDialog() {
                 }
             };
             fetchCompanies();
+            form.reset({ templateName: "", companyId: undefined, file: undefined });
         }
-    }, [open, supabase]);
+    }, [open, supabase, form]);
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            // 파일 이름으로 템플릿 이름 자동 완성 (확장자 제외)
-            setTemplateName(file.name.replace(/\.[^/.]+$/, ""));
-            setSelectedFile(file);
-        }
-    };
+    // 3. 업로드 핸들러 수정
+    async function onSubmit(values: z.infer<typeof formSchema>) {
+        let { file, companyId, templateName } = values;
 
-    // 2. 업로드 핸들러
-    const handleSubmit = async () => {
-        if (!selectedFile || !templateName || !selectedCompanyId) {
-            toast.warning("모든 필드를 채워주세요 (파일, 양식 이름, 사업장).");
-            return;
-        }
-
-        setIsUploading(true);
+        let createdTemplateId: string | null = null;
+        let createdFileUrl: string | null = null;
+        form.control.register('file'); // isSubmitting을 위해 수동 등록
 
         try {
-            // 2a. 파일을 Supabase Storage에 업로드
-            const fileExt = selectedFile.name.split('.').pop();
-            const fileName = `${selectedCompanyId}/${uuidv4()}.${fileExt}`;
+            // 4. 이미지 파일인 경우 압축 수행
+            if (file.type.startsWith('image/')) {
+                console.log(`원본 이미지 크기: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+                toast.info("이미지 압축을 시작합니다... (용량이 큰 경우 시간이 걸릴 수 있습니다)");
+
+                const options = {
+                    maxSizeMB: 4.5, // Claude 5MB 제한(Base64 오버헤드 감안)보다 작게
+                    maxWidthOrHeight: 1920, // 최대 해상도 1920px
+                    useWebWorker: true,
+                };
+                const compressedFile = await imageCompression(file, options);
+                console.log(`압축된 이미지 크기: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
+                file = compressedFile; // 업로드할 파일을 압축된 파일로 교체
+            }
+
+            // 5. (압축된) 파일을 Supabase Storage에 업로드
+            const fileExt = file.name.split('.').pop();
+            const fileName = `${companyId}/${uuidv4()}.${fileExt}`;
 
             const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('findings') // 'findings' 버킷을 같이 사용 (나중에 'templates' 버킷을 따로 만들어도 됨)
-                .upload(fileName, selectedFile);
+                .from('findings')
+                .upload(fileName, file);
 
             if (uploadError) throw uploadError;
+            createdFileUrl = uploadData.path;
 
-            // 2b. 파일 정보를 DB에 저장
-            const { error: dbError } = await supabase
+            // 6. DB에 템플릿 정보 저장
+            const { data: templateData, error: dbError } = await supabase
                 .from('assessment_templates')
                 .insert({
-                    company_id: selectedCompanyId,
+                    company_id: companyId,
                     template_name: templateName,
-                    original_file_url: uploadData.path, // Storage에 저장된 경로
-                });
+                    original_file_url: createdFileUrl,
+                })
+                .select('id')
+                .single();
 
             if (dbError) throw dbError;
+            createdTemplateId = templateData.id;
 
-            toast.success("양식이 성공적으로 업로드되었습니다.");
-            setOpen(false); // 팝업 닫기
-            router.refresh(); // 목록 페이지 새로고침
+            toast.success("양식 업로드 성공. AI 분석을 시작합니다...");
+
+            // 7. AI 분석 API 호출
+            const analyzeResponse = await fetch('/api/analyze-template', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    templateId: createdTemplateId,
+                    fileUrl: createdFileUrl,
+                }),
+            });
+
+            if (!analyzeResponse.ok) {
+                const errorResult = await analyzeResponse.json();
+                throw new Error(errorResult.error || "AI 분석 API 호출에 실패했습니다.");
+            }
+
+            const analyzeResult = await analyzeResponse.json();
+            toast.success("AI 분석 완료!", {
+                description: analyzeResult.message,
+            });
+
+            setOpen(false);
+            router.refresh();
 
         } catch (error: any) {
-            console.error('Template upload error:', error);
-            toast.error("업로드 실패", { description: error.message });
-        } finally {
-            setIsUploading(false);
-            // 폼 초기화
-            setSelectedFile(null);
-            setTemplateName('');
-            setSelectedCompanyId(undefined);
+            console.error('Template upload process error:', error);
+            toast.error("작업 실패", { description: error.message });
         }
-    };
+        // 'finally' 블록을 제거하여 isSubmitting이 자동으로 관리되도록 함
+    }
 
     return (
         <Dialog open={open} onOpenChange={setOpen}>
@@ -131,58 +183,86 @@ export default function UploadTemplateDialog() {
                         엑셀, PDF 또는 이미지 파일을 업로드하여 디지털 양식을 생성합니다.
                     </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-6 py-4">
-                    {/* 파일 선택 */}
-                    <div className="space-y-2">
-                        <Label htmlFor="file-upload">파일 선택 (엑셀, PDF, 이미지)</Label>
-                        <Input
-                            id="file-upload"
-                            type="file"
-                            onChange={handleFileChange}
-                            accept=".xls,.xlsx,.pdf,.png,.jpg,.jpeg"
-                            className="file:text-foreground"
+                <Form {...form}>
+                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                        <FormField
+                            control={form.control}
+                            name="file"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>파일 선택 (엑셀, PDF, 이미지)</FormLabel>
+                                    <FormControl>
+                                        <Input
+                                            type="file"
+                                            accept=".xls,.xlsx,.pdf,.png,.jpg,.jpeg"
+                                            className="file:text-foreground"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0];
+                                                if (file) {
+                                                    field.onChange(file);
+                                                    form.setValue('templateName', file.name.replace(/\.[^/.]+$/, ""), { shouldValidate: true });
+                                                }
+                                            }}
+                                        />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
                         />
-                        {selectedFile && <p className="text-sm text-muted-foreground">{selectedFile.name}</p>}
-                    </div>
-
-                    {/* 사업장 선택 */}
-                    <div className="space-y-2">
-                        <Label htmlFor="company">연결할 사업장</Label>
-                        <Select onValueChange={setSelectedCompanyId} value={selectedCompanyId}>
-                            <SelectTrigger id="company">
-                                <SelectValue placeholder="사업장을 선택하세요..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {companies.map((company) => (
-                                    <SelectItem key={company.id} value={company.id}>
-                                        {company.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-
-                    {/* 양식 이름 */}
-                    <div className="space-y-2">
-                        <Label htmlFor="template-name">양식 이름</Label>
-                        <Input
-                            id="template-name"
-                            value={templateName}
-                            onChange={(e) => setTemplateName(e.target.value)}
-                            placeholder="파일 이름으로 자동 완성됩니다."
+                        <FormField
+                            control={form.control}
+                            name="companyId"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>연결할 사업장</FormLabel>
+                                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                        <FormControl>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="사업장을 선택하세요..." />
+                                            </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent>
+                                            {companies.map((company) => (
+                                                <SelectItem key={company.id} value={company.id}>
+                                                    {company.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
                         />
-                    </div>
-                </div>
-                <DialogFooter>
-                    <Button
-                        type="submit"
-                        onClick={handleSubmit}
-                        disabled={isUploading}
-                    >
-                        {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
-                        {isUploading ? '업로드 중...' : '업로드 및 저장'}
-                    </Button>
-                </DialogFooter>
+                        <FormField
+                            control={form.control}
+                            name="templateName"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>양식 이름</FormLabel>
+                                    <FormControl>
+                                        <Input
+                                            placeholder="파일 이름으로 자동 완성됩니다."
+                                            {...field}
+                                        />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <DialogFooter>
+                            <DialogClose asChild>
+                                <Button type="button" variant="outline">취소</Button>
+                            </DialogClose>
+                            <Button
+                                type="submit"
+                                disabled={form.formState.isSubmitting}
+                            >
+                                {form.formState.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+                                {form.formState.isSubmitting ? '분석 중...' : '업로드 및 AI 분석'}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </Form>
             </DialogContent>
         </Dialog>
     );
