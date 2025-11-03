@@ -19,20 +19,14 @@ import {
     CardDescription,
     CardContent
 } from "@/components/ui/card";
-import { ArrowLeft, Edit } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
+// 1. EditTemplateDialog 임포트
+import { EditTemplateDialog } from '@/components/EditTemplateDialog';
 
 export const dynamic = 'force-dynamic';
 
 export default async function TemplateDetailPage({ params }: { params: { id: string, templateId: string } }) {
     const { id: companyId, templateId } = await params;
-
-    // --- 2. 노이즈 제거 (콘솔 에러 해결) ---
-    // .css.map 같은 파일 요청이 이 페이지로 라우팅되는 것을 방지합니다.
-    if (templateId.includes('.')) {
-        return notFound();
-    }
-    // ------------------------------------
-
     const supabase = await createClient();
 
     const { data: template, error } = await supabase
@@ -74,10 +68,9 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                 <CardContent>
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-semibold">AI가 분석한 양식 컬럼</h3>
-                        <Button variant="outline" size="sm">
-                            <Edit className="mr-2 h-4 w-4" />
-                            양식 수정하기
-                        </Button>
+                        {/* 2. 기존 버튼을 EditTemplateDialog 컴포넌트로 교체 */}
+                        {/* 데이터(items)를 props로 전달합니다. */}
+                        <EditTemplateDialog templateId={template.id} items={items} />
                     </div>
                     <div className="rounded-md border">
                         <Table>
@@ -91,10 +84,8 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                                 {items.length > 0 ? (
                                     items.map((item: any) => (
                                         <TableRow key={item.id}>
-                                            {/* --- 1. UI 버그 수정 (올바른 컬럼 이름 사용) --- */}
                                             <TableCell className="font-medium">{item.header_name}</TableCell>
                                             <TableCell>{item.default_value || '(비어있음)'}</TableCell>
-                                            {/* ------------------------------------------- */}
                                         </TableRow>
                                     ))
                                 ) : (
