@@ -19,8 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/componen
 import { createClient } from '@/utils/supabase/client';
 import { useRouter, useParams } from 'next/navigation';
 import { toast } from "sonner";
-import { ArrowLeft, Trash2, Loader2 } from "lucide-react";
-import Link from "next/link";
+import { Trash2, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
     Dialog,
@@ -33,8 +32,8 @@ import {
     DialogClose,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-// 1. 스켈레톤 컴포넌트 임포트
 import { CompanySettingsSkeleton } from "@/components/skeletons/CompanySettingsSkeleton";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const formSchema = z.object({
     name: z.string().min(2, {
@@ -63,10 +62,9 @@ export default function CompanySettingsPage() {
         },
     });
 
-    // 페이지 로드 시 기존 데이터 불러오기
     useEffect(() => {
         const fetchCompany = async () => {
-            // setIsLoading(true); // <-- useEffect 시작 시 true로 설정 (기본값이 이미 true)
+            setIsLoading(true);
             const { data, error } = await supabase
                 .from('companies')
                 .select('*')
@@ -84,7 +82,7 @@ export default function CompanySettingsPage() {
                 });
                 setCompanyName(data.name);
             }
-            setIsLoading(false); // <-- 데이터 로드 완료 후 false로 변경
+            setIsLoading(false);
         };
 
         if (companyId) {
@@ -92,7 +90,6 @@ export default function CompanySettingsPage() {
         }
     }, [companyId, supabase, router, form]);
 
-    // 폼 제출 핸들러 (Update)
     async function onSubmit(values: z.infer<typeof formSchema>) {
         const { error } = await supabase
             .from('companies')
@@ -104,12 +101,10 @@ export default function CompanySettingsPage() {
         } else {
             toast.success("사업장 정보가 성공적으로 수정되었습니다.");
             setCompanyName(values.name);
-            router.push(`/companies/${companyId}/settings`);
-            router.refresh();
+            router.refresh(); // 현재 페이지 데이터만 새로고침 (헤더의 이름도 바뀜)
         }
     }
 
-    // 삭제 핸들러 (Delete)
     async function onDelete() {
         setIsDeleting(true);
         const { error } = await supabase
@@ -124,117 +119,128 @@ export default function CompanySettingsPage() {
             toast.success("사업장이 삭제되었습니다.");
             setIsDeleting(false);
             setIsDeleteModalOpen(false);
-            router.push('/companies');
+            router.push('/companies'); // 삭제 후, 전체 사업장 목록으로 이동
             router.refresh();
         }
     }
 
     const requiredConfirmationText = `${companyName} 삭제를 동의합니다`;
 
-    // 2. 로딩 중일 때, 텍스트 대신 스켈레톤 컴포넌트를 반환
     if (isLoading) {
-        return <CompanySettingsSkeleton />;
-    }
-
-    // 3. 로딩 완료 후 실제 폼 렌더링
-    return (
-        <div className="w-full">
-            <Button variant="outline" size="sm" className="mb-4" asChild>
-                <Link href={`/companies/${companyId}`}>
-                    <ArrowLeft className="mr-2 h-4 w-4" />
-                    양식 목록으로 돌아가기
-                </Link>
-            </Button>
-
+        // 1. 스켈레톤도 Card만 반환하도록 수정 (뒤로가기 버튼 제거)
+        return (
             <Card>
                 <CardHeader>
-                    <CardTitle>사업장 정보 수정</CardTitle>
+                    <Skeleton className="h-8 w-48" />
                 </CardHeader>
-                <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)}>
-                        <CardContent className="space-y-6">
-                            <FormField
-                                control={form.control}
-                                name="name"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>사업장 이름 (필수)</FormLabel>
-                                        <FormControl>
-                                            <Input {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="address"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>주소 (선택)</FormLabel>
-                                        <FormControl>
-                                            <Input {...field} value={field.value ?? ''} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CardContent>
-                        <CardFooter className="flex justify-between mt-8">
-                            <Button type="submit" disabled={form.formState.isSubmitting}>
-                                {form.formState.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                {form.formState.isSubmitting ? '수정 중...' : '수정하기'}
-                            </Button>
-
-                            <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
-                                <DialogTrigger asChild>
-                                    <Button
-                                        type="button"
-                                        variant="destructive"
-                                        disabled={form.formState.isSubmitting}
-                                    >
-                                        <Trash2 className="mr-2 h-4 w-4" />
-                                        삭제하기
-                                    </Button>
-                                </DialogTrigger>
-                                <DialogContent>
-                                    <DialogHeader>
-                                        <DialogTitle>정말로 삭제하시겠습니까?</DialogTitle>
-                                        <DialogDescription>
-                                            이 작업은 되돌릴 수 없습니다. 이 사업장과 연결된
-                                            모든 양식 및 평가 이력이 **영구적으로 삭제됩니다.**
-                                        </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="py-4 space-y-2">
-                                        <Label htmlFor="delete-confirm">
-                                            계속하려면 <span className="font-bold text-foreground">{requiredConfirmationText}</span> 라고 입력하세요.
-                                        </Label>
-                                        <Input
-                                            id="delete-confirm"
-                                            value={confirmationText}
-                                            onChange={(e) => setConfirmationText(e.target.value)}
-                                            autoComplete="off"
-                                        />
-                                    </div>
-                                    <DialogFooter>
-                                        <DialogClose asChild>
-                                            <Button variant="outline">취소</Button>
-                                        </DialogClose>
-                                        <Button
-                                            variant="destructive"
-                                            onClick={onDelete}
-                                            disabled={isDeleting || confirmationText !== requiredConfirmationText}
-                                        >
-                                            {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-                                            {isDeleting ? '삭제 중...' : '삭제를 확인합니다'}
-                                        </Button>
-                                    </DialogFooter>
-                                </DialogContent>
-                            </Dialog>
-                        </CardFooter>
-                    </form>
-                </Form>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-10 w-full" />
+                    </div>
+                    <div className="space-y-2">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-10 w-full" />
+                    </div>
+                </CardContent>
+                <CardFooter className="flex justify-between">
+                    <Skeleton className="h-10 w-24" />
+                    <Skeleton className="h-10 w-28" />
+                </CardFooter>
             </Card>
-        </div>
+        );
+    }
+
+    return (
+        // 2. Card 컴포넌트가 최상위가 되도록 수정 (뒤로가기 버튼 제거)
+        <Card>
+            <CardHeader>
+                <CardTitle>사업장 정보 수정</CardTitle>
+            </CardHeader>
+            <Form {...form}>
+                <form onSubmit={form.handleSubmit(onSubmit)}>
+                    <CardContent className="space-y-6">
+                        <FormField
+                            control={form.control}
+                            name="name"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>사업장 이름 (필수)</FormLabel>
+                                    <FormControl>
+                                        <Input {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={form.control}
+                            name="address"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>주소 (선택)</FormLabel>
+                                    <FormControl>
+                                        <Input {...field} value={field.value ?? ''} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </CardContent>
+                    <CardFooter className="flex justify-between">
+                        <Button type="submit" disabled={form.formState.isSubmitting}>
+                            {form.formState.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            {form.formState.isSubmitting ? '수정 중...' : '수정하기'}
+                        </Button>
+
+                        <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
+                            <DialogTrigger asChild>
+                                <Button
+                                    type="button"
+                                    variant="destructive"
+                                    disabled={form.formState.isSubmitting}
+                                >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    삭제하기
+                                </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                                <DialogHeader>
+                                    <DialogTitle>정말로 삭제하시겠습니까?</DialogTitle>
+                                    <DialogDescription>
+                                        이 작업은 되돌릴 수 없습니다. 이 사업장과 연결된
+                                        모든 양식 및 평가 이력이 **영구적으로 삭제됩니다.**
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="py-4 space-y-2">
+                                    <Label htmlFor="delete-confirm">
+                                        계속하려면 <span className="font-bold text-foreground">{requiredConfirmationText}</span> 라고 입력하세요.
+                                    </Label>
+                                    <Input
+                                        id="delete-confirm"
+                                        value={confirmationText}
+                                        onChange={(e) => setConfirmationText(e.target.value)}
+                                        autoComplete="off"
+                                    />
+                                </div>
+                                <DialogFooter>
+                                    <DialogClose asChild>
+                                        <Button variant="outline">취소</Button>
+                                    </DialogClose>
+                                    <Button
+                                        variant="destructive"
+                                        onClick={onDelete}
+                                        disabled={isDeleting || confirmationText !== requiredConfirmationText}
+                                    >
+                                        {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                        {isDeleting ? '삭제 중...' : '삭제를 확인합니다'}
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
+                    </CardFooter>
+                </form>
+            </Form>
+        </Card>
     );
 }
