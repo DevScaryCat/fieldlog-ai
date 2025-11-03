@@ -1,6 +1,7 @@
 // /app/(dashboard)/companies/page.tsx
 
-import { createClient } from '@/utils/supabase/server' // async 함수 임포트
+import { createClient } from '@/utils/supabase/server';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
 import {
@@ -11,32 +12,20 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { PlusCircle, Edit } from 'lucide-react';
+import { PlusCircle, Settings } from 'lucide-react'; // Edit -> Settings 아이콘
 
 export const dynamic = 'force-dynamic';
 
 export default async function CompaniesPage() {
-    // createClient() 호출 앞에 await를 추가합니다.
     const supabase = await createClient();
 
-    console.log("Attempting to fetch companies with async client...");
+    const { data: companies, error } = await supabase
+        .from('companies')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    let companies: any[] | null = [];
-    let fetchError: any = null;
-
-    try {
-        const { data, error } = await supabase
-            .from('companies')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-        if (error) throw error;
-        companies = data;
-        console.log("Successfully fetched companies:", companies?.length);
-
-    } catch (error) {
-        fetchError = error;
-        console.error('💥 Error fetching companies:', JSON.stringify(fetchError, null, 2));
+    if (error) {
+        console.error('💥 Error fetching companies:', JSON.stringify(error, null, 2));
     }
 
     return (
@@ -51,22 +40,13 @@ export default async function CompaniesPage() {
                 </Button>
             </header>
 
-            {fetchError && (
-                <div className="mb-4 rounded border border-destructive bg-destructive/10 p-4 text-destructive">
-                    <p><strong>데이터 로딩 실패:</strong></p>
-                    <pre className="mt-2 text-xs whitespace-pre-wrap">
-                        {JSON.stringify(fetchError, null, 2)}
-                    </pre>
-                </div>
-            )}
-
             <div className="rounded-md border">
                 <Table>
                     <TableHeader>
                         <TableRow>
                             <TableHead className="w-[200px]">사업장명</TableHead>
                             <TableHead>주소</TableHead>
-                            <TableHead className="w-[100px] text-right">작업</TableHead>
+                            <TableHead className="w-[100px] text-right">관리</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -78,18 +58,21 @@ export default async function CompaniesPage() {
                                         {company.address || '-'}
                                     </TableCell>
                                     <TableCell className="text-right">
+                                        {/* --- 링크와 버튼이 수정되었습니다 --- */}
                                         <Button variant="outline" size="sm" asChild>
-                                            <Link href={`/companies/${company.id}/edit`}>
-                                                <Edit className="mr-2 h-4 w-4" /> 수정
+                                            {/* '/edit'을 빼고 사업장 ID의 메인 페이지로 연결 */}
+                                            <Link href={`/companies/${company.id}`}>
+                                                <Settings className="mr-2 h-4 w-4" /> 관리
                                             </Link>
                                         </Button>
+                                        {/* --------------------------------- */}
                                     </TableCell>
                                 </TableRow>
                             ))
                         ) : (
                             <TableRow>
                                 <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
-                                    {fetchError ? '데이터를 불러올 수 없습니다.' : '등록된 사업장이 없습니다.'}
+                                    등록된 사업장이 없습니다.
                                 </TableCell>
                             </TableRow>
                         )}
