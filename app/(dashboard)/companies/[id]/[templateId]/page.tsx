@@ -24,8 +24,15 @@ import { ArrowLeft, Edit } from 'lucide-react';
 export const dynamic = 'force-dynamic';
 
 export default async function TemplateDetailPage({ params }: { params: { id: string, templateId: string } }) {
-    // 1. 'params'를 'await'로 풀어줍니다. (Next.js 16 버그 수정)
     const { id: companyId, templateId } = await params;
+
+    // --- 2. 노이즈 제거 (콘솔 에러 해결) ---
+    // .css.map 같은 파일 요청이 이 페이지로 라우팅되는 것을 방지합니다.
+    if (templateId.includes('.')) {
+        return notFound();
+    }
+    // ------------------------------------
+
     const supabase = await createClient();
 
     const { data: template, error } = await supabase
@@ -50,7 +57,6 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
 
     return (
         <div className="w-full">
-            {/* 2. '뒤로가기' 링크가 '/companies/[id]' (기본 탭)로 가도록 수정 */}
             <Button variant="outline" size="sm" className="mb-4" asChild>
                 <Link href={`/companies/${companyId}`}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
@@ -85,8 +91,10 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                                 {items.length > 0 ? (
                                     items.map((item: any) => (
                                         <TableRow key={item.id}>
-                                            <TableCell className="font-medium">{item.category}</TableCell>
-                                            <TableCell>{item.item_text || '(비어있음)'}</TableCell>
+                                            {/* --- 1. UI 버그 수정 (올바른 컬럼 이름 사용) --- */}
+                                            <TableCell className="font-medium">{item.header_name}</TableCell>
+                                            <TableCell>{item.default_value || '(비어있음)'}</TableCell>
+                                            {/* ------------------------------------------- */}
                                         </TableRow>
                                     ))
                                 ) : (

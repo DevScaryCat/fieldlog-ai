@@ -22,45 +22,41 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 1. Supabase Storage에서 이미지 파일 다운로드
     const { data: fileData, error: downloadError } = await supabaseAdmin.storage.from("findings").download(fileUrl);
 
     if (downloadError) throw new Error(`파일 다운로드 실패: ${downloadError.message}`);
 
-    // 2. 파일을 Base64로 인코딩
     const imageBuffer = await fileData.arrayBuffer();
     const imageBase64 = Buffer.from(imageBuffer).toString("base64");
     const imageMediaType = fileData.type || "image/jpeg";
 
-    // 3. Claude Vision API에 보낼 프롬프트 정의
+    // --- 이 부분이 핵심 수정 사항입니다 (새로운 프롬프트) ---
     const prompt = `
-      당신은 이 이미지에 있는 표(Table)의 구조를 분석하는 AI입니다.
-      표의 각 **컬럼 헤더(Column Header)**를 순서대로 정확하게 추출해야 합니다.
-      
-      또한, '유해인자' 컬럼처럼 이미 '소음'이라는 값이 채워져 있다면, 그 **기본값(Default Value)**도 함께 추출해야 합니다.
+      당신은 이미지에서 표(Table)의 구조를 분석하는 OCR 및 데이터 추출 AI입니다.
 
       [분석 목표]:
-      1.  **헤더 추출:** 이미지에 있는 표의 헤더를 순서대로 추출합니다. (예: "no", "성함", "부서명", "공정명", "유해인자", "착용 보호구", "비고")
-      2.  **기본값 추출:** 만약 특정 컬럼(예: 유해인자)에 "소음"처럼 이미 값이 채워져 있다면, 그 값을 'default_value'로 추출합니다. 값이 비어있다면 null로 설정합니다.
+      이미지에 있는 표의 **최상단 메인 컬럼 헤더(Main Column Headers)**를 **보이는 순서대로** 정확하게 추출합니다.
+
+      [중요 규칙]:
+      1.  **회전 고려:** 이미지가 90도 또는 180도 회전되어 있을 수 있습니다. 텍스트를 인식할 때 이 점을 반드시 고려하여, 회전된 상태에서도 표의 헤더를 정확히 읽어주세요.
+      2.  **제목 무시:** '소음밀착검사 대상자 명단'과 같은 표의 **제목(Title)**은 헤더가 아니므로 **완전히 무시**하세요.
+      3.  **하위 헤더 무시:** '공정명칭'이나 '유해인자'처럼 여러 하위 셀을 포함하는 병합된 헤더가 있더라도, **최상위 헤더('공정명칭', '유해인자')만 추출**하고 그 아래의 하위 텍스트(예: '소음')는 무시합니다.
+      4.  **헤더만 추출:** 오직 **컬럼 헤더 이름**만 추출합니다. (기본값 추출 X)
+      5.  **정확한 순서:** 표에 보이는 순서대로(왼쪽에서 오른쪽, 또는 회전된 경우 위에서 아래) 추출해야 합니다.
 
       [출력 형식]:
-      반드시 아래와 같은 JSON 배열 형식으로만 응답해 주세요. 다른 설명은 절대 추가하지 마세요.
+      추출한 헤더 이름들을 **JSON 배열** 형식으로만 응답해 주세요.
+      다른 설명이나 대화 없이, 오직 JSON 객체만 \`\`\`json ... \`\`\` 마크다운 블록으로 감싸서 반환해야 합니다.
+      
+      [출력 예시 (제공된 이미지 기준)]:
       \`\`\`json
       {
-        "columns": [
-          { "header_name": "no", "default_value": null },
-          { "header_name": "성함", "default_value": null },
-          { "header_name": "부서명", "default_value": null },
-          { "header_name": "공정명", "default_value": null },
-          { "header_name": "유해인자", "default_value": "소음" },
-          { "header_name": "착용 보호구", "default_value": null },
-          { "header_name": "비고", "default_value": null }
-        ]
+        "headers": ["no", "성함", "부서명", "공정명칭", "유해인자", "착용 보호구", "비고"]
       }
       \`\`\`
     `;
+    // --------------------------------------------------------
 
-    // 4. Claude Vision API 호출
     const msg = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 4096,
@@ -94,20 +90,19 @@ export async function POST(req: NextRequest) {
 
     const resultJson = JSON.parse(jsonString);
 
-    if (!Array.isArray(resultJson.columns)) {
-      throw new Error("AI 응답 형식이 잘못되었습니다. (columns 배열이 아님)");
+    if (!Array.isArray(resultJson.headers)) {
+      throw new Error("AI 응답 형식이 잘못되었습니다. (headers 배열이 아님)");
     }
 
-    // 6. 'template_items' 테이블에 AI가 추출한 "헤더"와 "기본값"을 저장
-    const itemsToInsert = resultJson.columns.map((item: any, index: number) => ({
+    // --- 이 부분이 수정되었습니다 (DB 저장 로직) ---
+    // 6. 'template_items' 테이블에 AI가 추출한 "헤더"만 저장
+    const itemsToInsert = resultJson.headers.map((headerName: string, index: number) => ({
       template_id: templateId,
-      category: item.header_name,
-      // --- 이 부분이 수정되었습니다 ---
-      // item.default_value가 null이나 undefined이면, 빈 문자열('')을 대신 삽입합니다.
-      item_text: item.default_value || "",
-      // ----------------------------
+      header_name: headerName, // 'header_name' 컬럼에 헤더 이름 저장
+      default_value: null, // 'default_value'는 null로 저장
       sort_order: index,
     }));
+    // ------------------------------------------------
 
     const supabase = await createClient();
     const { error: insertError } = await supabase.from("template_items").insert(itemsToInsert);
