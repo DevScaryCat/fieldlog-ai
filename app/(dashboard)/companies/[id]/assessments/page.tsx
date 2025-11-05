@@ -18,13 +18,14 @@ import {
     CardDescription,
     CardContent
 } from "@/components/ui/card";
-import { PlusCircle, FileText } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { Badge } from "@/components/ui/badge";
+// 1. StartAssessmentDialog 임포트
+import { StartAssessmentDialog } from '@/components/StartAssessmentDialog';
 
 export const dynamic = 'force-dynamic';
 
 export default async function CompanyAssessmentsPage({ params }: { params: { id: string } }) {
-    // 1. Next.js 16+ 방식: params를 await로 풀어줍니다.
     const { id: companyId } = await params;
     const supabase = await createClient();
 
@@ -53,7 +54,6 @@ export default async function CompanyAssessmentsPage({ params }: { params: { id:
         }
     };
 
-    // 2. 탭 레이아웃이 있으므로 Card만 반환합니다.
     return (
         <Card>
             <CardHeader className="flex flex-row items-center justify-between">
@@ -63,10 +63,8 @@ export default async function CompanyAssessmentsPage({ params }: { params: { id:
                         이 사업장에서 수행된 모든 평가 이력입니다.
                     </CardDescription>
                 </div>
-                <Button>
-                    <PlusCircle className="mr-2 h-4 w-4" />
-                    새 평가 시작
-                </Button>
+                {/* 2. 기존 Button을 Dialog 컴포넌트로 교체하고 companyId 전달 */}
+                <StartAssessmentDialog companyId={companyId} />
             </CardHeader>
             <CardContent>
                 {fetchError && (
@@ -97,7 +95,9 @@ export default async function CompanyAssessmentsPage({ params }: { params: { id:
                                     <TableCell className="text-right">
                                         {assessment.status === 'completed' ? (
                                             <Button variant="outline" size="sm" asChild>
-                                                <Link href={`/assessments/${assessment.id}/report`}>
+                                                {/* 3. (중요) 보고서 보기 링크 경로 수정 */}
+                                                {/* /assessments/[id]/report -> /record/[id]/report */}
+                                                <Link href={`/record/${assessment.id}/report`}>
                                                     <FileText className="mr-2 h-4 w-4" /> 보기
                                                 </Link>
                                             </Button>
