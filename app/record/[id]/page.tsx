@@ -13,7 +13,6 @@ import { Camera, StopCircle, Loader2, Mic } from "lucide-react";
 import { v4 as uuidv4 } from 'uuid';
 import { toast } from 'sonner';
 
-// DB 'template_items' 타입
 type TemplateItem = {
     id: string;
     header_name: string | null;
@@ -21,6 +20,23 @@ type TemplateItem = {
     sort_order: number | null;
     template_id: string;
     parent_id: string | null;
+};
+
+// 1. 오디오 Blob의 재생 시간을 비동기적으로 가져오는 헬퍼 함수
+const getAudioDuration = (audioBlob: Blob): Promise<number> => {
+    return new Promise((resolve, reject) => {
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio();
+        audio.src = audioUrl;
+        audio.onloadedmetadata = () => {
+            resolve(audio.duration); // 재생 시간 (초)
+            URL.revokeObjectURL(audioUrl); // 메모리 해제
+        };
+        audio.onerror = (e) => {
+            reject(new Error("오디오 파일 길이를 읽을 수 없습니다."));
+            URL.revokeObjectURL(audioUrl);
+        };
+    });
 };
 
 export default function RecordPage() {
@@ -39,20 +55,15 @@ export default function RecordPage() {
     const router = useRouter();
     const supabase = createClient();
 
-    // 페이지 로드 시: 평가 정보 & 양식 불러오기, 녹음 시작
+    // (useEffect, handleTakePhotoClick, handlePhotoUpload 함수는 이전과 동일)
+    // ... (생략 없이 모두 포함) ...
     useEffect(() => {
         async function setupAssessment() {
             if (!assessmentId) return;
 
             const { data, error } = await supabase
                 .from('assessments')
-                .select(`
-          *,
-          assessment_templates (
-            *,
-            template_items (*)
-          )
-        `)
+                .select(`*, assessment_templates (*, template_items (*))`)
                 .eq('id', assessmentId)
                 .single();
 
@@ -68,7 +79,7 @@ export default function RecordPage() {
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const mediaRecorder = new MediaRecorder(stream);
+                const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' }); // 2. mimeType 명시
                 mediaRecorderRef.current = mediaRecorder;
                 audioChunksRef.current = [];
 
@@ -91,12 +102,10 @@ export default function RecordPage() {
         };
     }, [assessmentId, router, supabase]);
 
-    // 사진 촬영 버튼 클릭 시
     const handleTakePhotoClick = () => {
         photoInputRef.current?.click();
     };
 
-    // 사진 파일이 선택되었을 때
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -132,37 +141,35 @@ export default function RecordPage() {
         }
     };
 
-    // 평가 종료 버튼 클릭 시
+    // 3. '평가 종료' 핸들러 (스마트 분기 로직 적용)
     const handleStopAssessment = async () => {
         if (!mediaRecorderRef.current) return;
 
         setIsLoading(true);
         setIsRecording(false);
-        toast.info("평가를 종료하고 파일 업로드를 시작합니다...");
+        toast.info("평가를 종료하고 파일 처리를 시작합니다...");
 
         mediaRecorderRef.current.onstop = async () => {
             const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-            const audioFileName = `${assessmentId}/${uuidv4()}.webm`;
+            const audioFileName = `${uuidv4()}.webm`;
+            const audioFile = new File([audioBlob], audioFileName, { type: 'audio/webm' });
 
             try {
-                const { data: uploadData, error: uploadError } = await supabase.storage
-                    .from('findings')
-                    .upload(audioFileName, audioBlob);
+                // 4. (신규) 오디오 재생 시간 측정
+                const duration = await getAudioDuration(audioBlob);
+                console.log(`[Client] 녹음 시간 측정 완료: ${duration}초`);
 
-                if (uploadError) throw uploadError;
+                // 5. FormData에 파일과 함께 (중요) '재생 시간'과 '평가 ID'를 담아 전송
+                const formData = new FormData();
+                formData.append('audioFile', audioFile);
+                formData.append('assessmentId', assessmentId);
+                formData.append('duration', duration.toString());
+                // (참고: 사진 목록도 여기서 함께 보낼 수 있습니다)
 
-                await supabase
-                    .from('assessments')
-                    .update({
-                        status: 'completed',
-                        full_audio_url: uploadData.path
-                    })
-                    .eq('id', assessmentId);
-
+                // 6. 백엔드 API 호출 (파일 직접 전송)
                 const response = await fetch('/api/transcribe', {
                     method: 'POST',
-                    body: JSON.stringify({ audioUrl: uploadData.path, assessmentId: assessmentId }),
-                    headers: { 'Content-Type': 'application/json' },
+                    body: formData, // JSON 대신 FormData 전송
                 });
 
                 if (!response.ok) {
@@ -171,6 +178,7 @@ export default function RecordPage() {
                 }
 
                 toast.success("평가 완료! AI 분석이 시작되었습니다.");
+                // 7. '보고서' 페이지로 이동
                 router.push(`/record/${assessmentId}/report`);
                 router.refresh();
 
@@ -212,10 +220,9 @@ export default function RecordPage() {
                         </div>
                     )}
                 </CardHeader>
-                {/* --- 이 부분이 수정되었습니다 --- */}
                 <CardContent className="flex flex-col md:flex-row gap-4">
                     <Button
-                        className="w-full md:w-1/2" // 1. w-full을 md:w-1/2로 수정
+                        className="w-full md:w-1/2"
                         size="lg"
                         onClick={handleTakePhotoClick}
                         disabled={isUploading || isLoading}
@@ -224,7 +231,7 @@ export default function RecordPage() {
                         {isUploading ? '사진 첨부 중...' : '사진 촬영 / 첨부'}
                     </Button>
                     <Button
-                        className="w-full md:w-1/2" // 2. w-full을 md:w-1/2로 수정
+                        className="w-full md:w-1/2"
                         size="lg"
                         variant="destructive"
                         onClick={handleStopAssessment}
@@ -234,7 +241,6 @@ export default function RecordPage() {
                         {isLoading ? '저장 중...' : '평가 종료 및 저장'}
                     </Button>
                 </CardContent>
-                {/* ----------------------------- */}
             </Card>
 
             <Card>
