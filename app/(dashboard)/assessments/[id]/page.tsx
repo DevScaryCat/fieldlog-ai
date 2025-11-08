@@ -1,4 +1,4 @@
-// /app/record/[id]/page.tsx
+// /app/(dashboard)/assessments/[id]/page.tsx
 
 'use client';
 
@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Camera, StopCircle, Loader2, Mic } from "lucide-react";
+import { Camera, StopCircle, Loader2, Mic, ArrowLeft } from "lucide-react";
 import { v4 as uuidv4 } from 'uuid';
 import { toast } from 'sonner';
+import Link from 'next/link';
 
 type TemplateItem = {
     id: string;
@@ -22,22 +23,7 @@ type TemplateItem = {
     parent_id: string | null;
 };
 
-// 1. 오디오 Blob의 재생 시간을 비동기적으로 가져오는 헬퍼 함수
-const getAudioDuration = (audioBlob: Blob): Promise<number> => {
-    return new Promise((resolve, reject) => {
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio();
-        audio.src = audioUrl;
-        audio.onloadedmetadata = () => {
-            resolve(audio.duration); // 재생 시간 (초)
-            URL.revokeObjectURL(audioUrl); // 메모리 해제
-        };
-        audio.onerror = (e) => {
-            reject(new Error("오디오 파일 길이를 읽을 수 없습니다."));
-            URL.revokeObjectURL(audioUrl);
-        };
-    });
-};
+// 1. (수정) getAudioDuration 헬퍼 함수 제거됨
 
 export default function RecordPage() {
     const [assessment, setAssessment] = useState<any>(null);
@@ -55,8 +41,6 @@ export default function RecordPage() {
     const router = useRouter();
     const supabase = createClient();
 
-    // (useEffect, handleTakePhotoClick, handlePhotoUpload 함수는 이전과 동일)
-    // ... (생략 없이 모두 포함) ...
     useEffect(() => {
         async function setupAssessment() {
             if (!assessmentId) return;
@@ -79,7 +63,7 @@ export default function RecordPage() {
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' }); // 2. mimeType 명시
+                const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
                 mediaRecorderRef.current = mediaRecorder;
                 audioChunksRef.current = [];
 
@@ -112,7 +96,6 @@ export default function RecordPage() {
 
         setIsUploading(true);
         toast.info("사진 업로드를 시작합니다...");
-
         const timestamp = Math.floor(Date.now() / 1000);
 
         try {
@@ -141,63 +124,81 @@ export default function RecordPage() {
         }
     };
 
-    // 3. '평가 종료' 핸들러 (스마트 분기 로직 적용)
+    // 2. (수정) '평가 종료' 핸들러 (duration 제거)
     const handleStopAssessment = async () => {
-        if (!mediaRecorderRef.current) return;
+        if (!mediaRecorderRef.current || isRecording === false) return;
 
         setIsLoading(true);
         setIsRecording(false);
         toast.info("평가를 종료하고 파일 처리를 시작합니다...");
 
-        mediaRecorderRef.current.onstop = async () => {
-            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-            const audioFileName = `${uuidv4()}.webm`;
-            const audioFile = new File([audioBlob], audioFileName, { type: 'audio/webm' });
-
-            try {
-                // 4. (신규) 오디오 재생 시간 측정
-                const duration = await getAudioDuration(audioBlob);
-                console.log(`[Client] 녹음 시간 측정 완료: ${duration}초`);
-
-                // 5. FormData에 파일과 함께 (중요) '재생 시간'과 '평가 ID'를 담아 전송
-                const formData = new FormData();
-                formData.append('audioFile', audioFile);
-                formData.append('assessmentId', assessmentId);
-                formData.append('duration', duration.toString());
-                // (참고: 사진 목록도 여기서 함께 보낼 수 있습니다)
-
-                // 6. 백엔드 API 호출 (파일 직접 전송)
-                const response = await fetch('/api/transcribe', {
-                    method: 'POST',
-                    body: formData, // JSON 대신 FormData 전송
-                });
-
-                if (!response.ok) {
-                    const errorBody = await response.json();
-                    throw new Error(`AI 분석 API 호출 실패: ${errorBody.error}`);
-                }
-
-                toast.success("평가 완료! AI 분석이 시작되었습니다.");
-                // 7. '보고서' 페이지로 이동
-                router.push(`/record/${assessmentId}/report`);
-                router.refresh();
-
-            } catch (error: any) {
-                toast.error("평가 종료 처리 실패", { description: error.message });
-                setIsLoading(false);
-                setIsRecording(true);
-            }
+        const stopRecording = (): Promise<Blob> => {
+            return new Promise((resolve, reject) => {
+                if (!mediaRecorderRef.current) return reject(new Error("MediaRecorder가 없습니다."));
+                mediaRecorderRef.current.onstop = () => {
+                    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    audioChunksRef.current = [];
+                    resolve(audioBlob);
+                };
+                mediaRecorderRef.current.onerror = (event: any) => reject(event.error || new Error("녹음 실패"));
+                mediaRecorderRef.current.stop();
+            });
         };
 
-        mediaRecorderRef.current.stop();
+        try {
+            const audioBlob = await stopRecording();
+            if (audioBlob.size === 0) throw new Error("녹음된 데이터가 없습니다.");
+
+            const audioFile = new File([audioBlob], `${uuidv4()}.webm`, { type: 'audio/webm' });
+            // (duration 측정 로직 제거됨)
+
+            const formData = new FormData();
+            formData.append('audioFile', audioFile);
+            formData.append('assessmentId', assessmentId);
+            // (duration 전송 제거됨)
+
+            const response = await fetch('/api/transcribe', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    const errorBody = await response.json();
+                    throw new Error(`AI 분석 API 호출 실패: ${errorBody.error || '알 수 없는 오류'}`);
+                } else {
+                    throw new Error(`서버 오류: ${response.status} ${response.statusText}`);
+                }
+            }
+
+            toast.success("평가 완료! AI 분석이 시작되었습니다.");
+            router.push(`/assessments/${assessmentId}/report`);
+            router.refresh();
+
+        } catch (error: any) {
+            toast.error("평가 종료 처리 실패", { description: error.message });
+            setIsLoading(false);
+        }
     };
 
     if (isLoading && !assessment) {
-        return <div className="text-center p-10"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+        return (
+            <div className="w-full flex justify-center items-center p-10">
+                <Loader2 className="h-8 w-8 animate-spin" />
+            </div>
+        );
     }
 
     return (
         <div className="space-y-6">
+            <Button variant="outline" size="sm" className="mb-4" asChild>
+                <Link href={`/companies/${assessment?.company_id}/assessments`}>
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    평가 이력으로 돌아가기
+                </Link>
+            </Button>
+
             <input
                 type="file"
                 ref={photoInputRef}
