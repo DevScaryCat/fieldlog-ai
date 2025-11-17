@@ -11,14 +11,25 @@ import {
     CardDescription,
     CardContent
 } from "@/components/ui/card";
-import { ArrowLeft } from 'lucide-react';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog"; // 1. Dialog 임포트
+import { ArrowLeft, Edit, Eye } from 'lucide-react'; // 2. Eye 아이콘 임포트
 import { TemplateEditor } from '@/components/TemplateEditor';
+import { TemplateExcelView } from '@/components/TemplateExcelView'; // 3. 엑셀 뷰 임포트
 
 export const dynamic = 'force-dynamic';
 
-async function fetchTemplateData(companyId: string, templateId: string) {
+export default async function TemplateDetailPage({ params }: { params: { id: string, templateId: string } }) {
+    const { id: companyId, templateId } = await params;
     const supabase = await createClient();
-    const { data, error } = await supabase
+
+    const { data: template, error } = await supabase
         .from('assessment_templates')
         .select(`
       *,
@@ -29,18 +40,11 @@ async function fetchTemplateData(companyId: string, templateId: string) {
         .eq('company_id', companyId)
         .single();
 
-    if (error || !data) {
+    if (error || !template) {
         console.error('Error fetching template details:', error);
-        notFound();
+        return notFound();
     }
-    return data;
-}
 
-export default async function TemplateDetailPage({ params }: { params: { id: string, templateId: string } }) {
-    const { id: companyId, templateId } = await params;
-    const template = await fetchTemplateData(companyId, templateId);
-
-    // DB에서 가져온 평탄화된 데이터를 TemplateEditor로 전달
     const items = template.template_items || [];
 
     return (
@@ -59,8 +63,37 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                         연결된 사업장: {template.companies?.name || '미지정'}
                     </CardDescription>
                 </CardHeader>
-                {/* CardContent에 패딩 추가 */}
-                <CardContent className="pt-6">
+                <CardContent>
+                    {/* 4. (수정) "엑셀 뷰로 미리보기" 버튼 + Dialog 추가 */}
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-semibold">양식 구조 편집 (트리 뷰)</h3>
+                        <div className="flex gap-2">
+                            {/* 엑셀 뷰 모달 */}
+                            <Dialog>
+                                <DialogTrigger asChild>
+                                    <Button variant="outline" size="sm">
+                                        <Eye className="mr-2 h-4 w-4" />
+                                        엑셀 뷰로 미리보기
+                                    </Button>
+                                </DialogTrigger>
+                                <DialogContent className="sm:max-w-4xl md:max-w-6xl"> {/* 5. 모달 크기 크게 */}
+                                    <DialogHeader>
+                                        <DialogTitle>{template.template_name}</DialogTitle>
+                                        <DialogDescription>
+                                            AI가 분석한 양식의 최종 "엑셀 뷰" 미리보기입니다.
+                                        </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="max-h-[70vh] overflow-y-auto p-4">
+                                        <TemplateExcelView initialItems={items} />
+                                    </div>
+                                </DialogContent>
+                            </Dialog>
+
+                            {/* 기존 수정하기 버튼 (TemplateEditor가 처리) */}
+                        </div>
+                    </div>
+
+                    {/* 6. (수정) TemplateEditor를 CardContent 바로 아래로 이동 */}
                     <TemplateEditor initialItems={items} templateId={template.id} />
                 </CardContent>
             </Card>

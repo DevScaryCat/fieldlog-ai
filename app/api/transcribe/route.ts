@@ -3,9 +3,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceRoleClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
-import { DeepgramClient, PrerecordedTranscriptionOptions } from "@deepgram/sdk"; // 1. Deepgram 임포트
+import { DeepgramClient, PrerecordedTranscriptionOptions, Source } from "@deepgram/sdk";
 
-export const maxDuration = 300; // 5분
+export const maxDuration = 300;
 
 const supabaseAdmin = createServiceRoleClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,41 +16,44 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
-// 2. Deepgram 클라이언트 초기화
 const deepgram = new DeepgramClient(process.env.DEEPGRAM_API_KEY!);
 
 // --- 헬퍼 함수 1: STT (Deepgram) ---
-async function transcribeAudio(audioFile: File): Promise<string> {
+async function transcribeAudio(audioFile: File): Promise<string | null> {
   console.log(`[AI Pipeline] Using Deepgram API for file: ${audioFile.name}`);
 
-  // 1. File 객체를 Buffer로 변환
   const audioBuffer = await audioFile.arrayBuffer();
   const buffer = Buffer.from(audioBuffer);
 
-  // 2. Deepgram API 호출 옵션
+  const source: Source = {
+    buffer: buffer,
+    mimetype: "audio/webm",
+  };
+
   const options: PrerecordedTranscriptionOptions = {
     model: "nova-2",
     language: "ko",
-    smart_format: true, // 단락, 문장 부호 등 자동 서식
-    diarize: true, // (선택 사항) 화자 분리
+    smart_format: true,
   };
 
-  // 3. Deepgram에 파일 전송 및 변환 요청
-  const { result, error } = await deepgram.listen.prerecorded.transcribeFile(buffer, options);
+  const { result, error } = await deepgram.listen.prerecorded.transcribeFile(source, options);
 
   if (error) {
     throw new Error(`Deepgram STT Error: ${error.message}`);
   }
 
-  // 4. 결과 텍스트 추출
   const transcript = result.results.channels[0].alternatives[0].transcript;
-  console.log("[AI Pipeline] Deepgram STT Complete.");
 
+  if (!transcript || transcript.trim().length === 0) {
+    console.log("[AI Pipeline] No speech detected in audio file.");
+    return null;
+  }
+
+  console.log("[AI Pipeline] Deepgram STT Complete.");
   return transcript;
 }
 
 // --- 헬퍼 함수 2: LLM (양식 채우기 - Claude) ---
-// (이 함수는 STT와 무관하므로, 이전과 100% 동일합니다)
 async function analyzeTranscript(assessmentId: string, transcript: string): Promise<void> {
   const { data: assessmentData, error: fetchError } = await supabaseAdmin
     .from("assessments")
@@ -77,49 +80,55 @@ async function analyzeTranscript(assessmentId: string, transcript: string): Prom
   );
   const findings = assessmentData.findings || [];
 
+  // --- (수정됨) 백틱 문제를 피하기 위해 안전한 문자열로 변경 ---
   const prompt = `
     당신은 베테랑 안전 컨설턴트의 AI 비서입니다.
-    당신의 임무는 컨설턴트의 [현장 녹음 대본]을 분석하여, 미리 준비된 [평가 양식]의 빈칸을 채우는 것입니다.
-    [현장 녹음 대본 (답안지)]:
+    당신의 임무는 컨설턴트의 [현장 녹음 대본]을 분석하여, 미리 준비된 [평가 양식]의 빈칸을 "추론"하여 채우는 것입니다.
+
+    [현장 녹음 대본 (컨설턴트의 자연스러운 대화)]:
     ---
     ${transcript}
     ---
+
     [평가 양식 (질문지)]:
     ${JSON.stringify(
       templateItems.map((item) => ({ id: item.id, header: item.header_name, parent_id: item.parent_id })),
       null,
       2
     )}
+
     [참고 자료 (현장 사진 목록)]:
     ${JSON.stringify(
       findings.map((f) => ({ id: f.id, timestamp: f.timestamp_seconds })),
       null,
       2
     )}
+
     [지시 사항]:
-    1.  [현장 녹음 대본]을 주의 깊게 읽고, 각 [평가 양식] 항목(header)에 대한 "답변(value)"을 대본에서 찾으세요.
-    2.  대본은 여러 위험 요인을 순서대로 언급할 수 있습니다. 각 위험 요인마다 **새로운 "답안지 세트"**를 만드세요.
-    3.  답변은 [평가 양식]의 \`id\`와 매칭하여 JSON 형식으로 반환해야 합니다.
+    1.  [중요] 컨설턴트는 양식의 헤더(예: 분류는..., 원인은...)를 절대 말하지 않습니다.
+    2.  당신은 컨설턴트의 자연스러운 대화 (예: 와, 여기 기름 끓는데 덮개도 없네요. 화상 위험이 큽니다.)를 이해하고 추론해야 합니다.
+    3.  대화의 맥락을 파악하여, 이 대화가 [평가 양식]의 어떤 항목에 대한 답변인지 스스로 판단하세요.
+        * 예: 기름, 화상 위험 -> 유해위험요인 - 분류 항목에 화학적 요인 또는 고온 위험이라고 추론.
+        * 예: 전선 피복이 벗겨짐 -> 유해위험요인 - 분류 항목에 전기적 요인이라고 추론.
+        * 예: 감전 재해 -> 유해위험요인 - 유해위험요인 항목에 작업자 감전 재해라고 추론.
+    4.  대본에서 여러 개의 개별 위험 요인 세트를 발견하고, 각각의 세트별로 답변을 생성하세요.
+    5.  답변을 찾을 수 없는 항목은 null (소문자 텍스트)로 두세요.
+
     [출력 형식 (JSON 배열)]:
     대본에서 발견한 위험 요인 "세트"의 수만큼 배열을 만드세요.
-    \`\`\`json
+    반드시 [JSON_START] 태그와 [JSON_END] 태그 사이에 유효한 JSON 배열만 넣으세요.
+
+    [JSON_START]
     [
       { 
         "set_id": 1,
         "results": [
-          { "template_item_id": "db640dbc-...", "result_value": "화학적 요인" },
-          { "template_item_id": "8ededd17-...", "result_value": "고온의 기름(식용유)이 방치됨" }
-        ]
-      },
-      { 
-        "set_id": 2,
-        "results": [
-          { "template_item_id": "db640dbc-...", "result_value": "전기적 요인" },
-          { "template_item_id": "8ededd17-...", "result_value": "전선 피복이 벗겨져 심선이 노출됨" }
+          { "template_item_id": "ID_HERE", "result_value": "화학적 요인" },
+          { "template_item_id": "ID_HERE", "result_value": "고온의 기름이 방치됨" }
         ]
       }
     ]
-    \`\`\`
+    [JSON_END]
   `;
 
   const msg = await anthropic.messages.create({
@@ -129,11 +138,15 @@ async function analyzeTranscript(assessmentId: string, transcript: string): Prom
   });
 
   const responseText = msg.content[0].text;
-  const jsonMatch = responseText.match(/```json([\sS]*?)```/);
+
+  // --- JSON 파싱 로직 수정 (태그 기반 추출) ---
+  const jsonMatch = responseText.match(/\[JSON_START\]([\s\S]*?)\[JSON_END\]/);
   let jsonString: string;
+
   if (jsonMatch && jsonMatch[1]) {
     jsonString = jsonMatch[1].trim();
   } else {
+    // 태그가 없을 경우 대괄호로 추출 시도
     const start = responseText.indexOf("[");
     const end = responseText.lastIndexOf("]");
     if (start !== -1 && end !== -1 && end > start) {
@@ -178,15 +191,21 @@ export async function POST(req: NextRequest) {
     const audioFile = formData.get("audioFile") as File | null;
     assessmentId = formData.get("assessmentId") as string | null;
 
-    // 3. (수정) 'duration'은 더 이상 필요 없습니다.
-    // const durationStr = formData.get('duration') as string | null;
-
     if (!audioFile || !assessmentId) {
       return NextResponse.json({ error: "Audio, Assessment ID가 모두 필요합니다." }, { status: 400 });
     }
 
     // [Step 1: STT] (Deepgram 사용)
-    const transcript = await transcribeAudio(audioFile); // duration 인자 제거
+    const transcript = await transcribeAudio(audioFile);
+
+    if (transcript === null) {
+      await supabaseAdmin
+        .from("assessments")
+        .update({ status: "failed", error_message: "음성 내용이 없습니다." })
+        .eq("id", assessmentId);
+
+      return NextResponse.json({ message: "No speech detected" });
+    }
 
     await supabaseAdmin
       .from("assessments")

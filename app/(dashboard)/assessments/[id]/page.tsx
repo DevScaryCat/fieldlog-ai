@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Camera, StopCircle, Loader2, Mic, ArrowLeft } from "lucide-react";
+import { Camera, StopCircle, Loader2, Mic, ArrowLeft, RefreshCw } from "lucide-react";
 import { v4 as uuidv4 } from 'uuid';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -23,7 +23,22 @@ type TemplateItem = {
     parent_id: string | null;
 };
 
-// 1. (수정) getAudioDuration 헬퍼 함수 제거됨
+// 오디오 Blob의 재생 시간을 비동기적으로 가져오는 헬퍼 함수
+const getAudioDuration = (audioBlob: Blob): Promise<number> => {
+    return new Promise((resolve, reject) => {
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio();
+        audio.src = audioUrl;
+        audio.onloadedmetadata = () => {
+            resolve(audio.duration);
+            URL.revokeObjectURL(audioUrl);
+        };
+        audio.onerror = (e) => {
+            reject(new Error("오디오 파일 길이를 읽을 수 없습니다."));
+            URL.revokeObjectURL(audioUrl);
+        };
+    });
+};
 
 export default function RecordPage() {
     const [assessment, setAssessment] = useState<any>(null);
@@ -31,6 +46,7 @@ export default function RecordPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [isEmptyTranscript, setIsEmptyTranscript] = useState(false);
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
@@ -41,6 +57,7 @@ export default function RecordPage() {
     const router = useRouter();
     const supabase = createClient();
 
+    // 페이지 로드 시
     useEffect(() => {
         async function setupAssessment() {
             if (!assessmentId) return;
@@ -68,9 +85,12 @@ export default function RecordPage() {
                 audioChunksRef.current = [];
 
                 mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) audioChunksRef.current.push(event.data);
+                    if (event.data.size > 0) {
+                        audioChunksRef.current.push(event.data);
+                    }
                 };
-                mediaRecorder.start(1000);
+
+                mediaRecorder.start();
                 setIsRecording(true);
             } catch (err) {
                 toast.error("마이크 권한이 필요합니다.", { description: "브라우저 설정에서 마이크 접근을 허용해주세요." });
@@ -86,10 +106,12 @@ export default function RecordPage() {
         };
     }, [assessmentId, router, supabase]);
 
+    // 사진 촬영 버튼
     const handleTakePhotoClick = () => {
         photoInputRef.current?.click();
     };
 
+    // 사진 업로드 핸들러
     const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -124,7 +146,7 @@ export default function RecordPage() {
         }
     };
 
-    // 2. (수정) '평가 종료' 핸들러 (duration 제거)
+    // '평가 종료' 핸들러 (수정됨)
     const handleStopAssessment = async () => {
         if (!mediaRecorderRef.current || isRecording === false) return;
 
@@ -134,7 +156,9 @@ export default function RecordPage() {
 
         const stopRecording = (): Promise<Blob> => {
             return new Promise((resolve, reject) => {
-                if (!mediaRecorderRef.current) return reject(new Error("MediaRecorder가 없습니다."));
+                if (!mediaRecorderRef.current) {
+                    return reject(new Error("MediaRecorder가 없습니다."));
+                }
                 mediaRecorderRef.current.onstop = () => {
                     const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                     audioChunksRef.current = [];
@@ -147,15 +171,17 @@ export default function RecordPage() {
 
         try {
             const audioBlob = await stopRecording();
-            if (audioBlob.size === 0) throw new Error("녹음된 데이터가 없습니다.");
+
+            if (audioBlob.size < 1000) { // 1KB 미만
+                // (핵심) 여기서 에러를 던집니다.
+                throw new Error("녹음된 데이터가 너무 짧습니다 (음성 없음).");
+            }
 
             const audioFile = new File([audioBlob], `${uuidv4()}.webm`, { type: 'audio/webm' });
-            // (duration 측정 로직 제거됨)
 
             const formData = new FormData();
             formData.append('audioFile', audioFile);
             formData.append('assessmentId', assessmentId);
-            // (duration 전송 제거됨)
 
             const response = await fetch('/api/transcribe', {
                 method: 'POST',
@@ -166,22 +192,61 @@ export default function RecordPage() {
                 const contentType = response.headers.get('content-type');
                 if (contentType && contentType.includes('application/json')) {
                     const errorBody = await response.json();
+                    // 백엔드가 "음성 없음"을 감지한 경우 (Deepgram이 빈 텍스트 반환)
+                    if (errorBody.message === "No speech detected") {
+                        toast.error("음성 내용 없음", { description: "녹음된 파일에서 음성을 감지하지 못했습니다." });
+                        setIsEmptyTranscript(true); // "음성 없음" UI 표시
+                        setIsLoading(false);
+                        return; // 함수 종료
+                    }
                     throw new Error(`AI 분석 API 호출 실패: ${errorBody.error || '알 수 없는 오류'}`);
                 } else {
                     throw new Error(`서버 오류: ${response.status} ${response.statusText}`);
                 }
             }
 
-            toast.success("평가 완료! AI 분석이 시작되었습니다.");
-            router.push(`/assessments/${assessmentId}/report`);
-            router.refresh();
+            const result = await response.json();
+
+            if (result.message === "No speech detected") {
+                // 백엔드가 "음성 없음"을 감지한 경우 (재확인)
+                toast.error("음성 내용 없음", { description: "녹음된 파일에서 음성을 감지하지 못했습니다." });
+                setIsEmptyTranscript(true);
+                setIsLoading(false);
+            } else if (result.message === "Analysis complete") {
+                // (정상)
+                toast.success("평가 완료! AI 분석이 시작되었습니다.");
+                router.push(`/assessments/${assessmentId}/report`);
+                router.refresh();
+            }
 
         } catch (error: any) {
-            toast.error("평가 종료 처리 실패", { description: error.message });
+
+            // --- (핵심 수정) ---
+            // 프론트엔드가 '음성 없음' 에러를 감지했을 때
+            if (error.message.includes("음성 없음")) {
+                toast.error(error.message);
+                setIsEmptyTranscript(true); // 1. "음성 감지 실패" UI 표시
+
+                // 2. (신규) DB 상태를 'failed'로 직접 업데이트
+                //    (이 로직이 실행되어야 '평가 이력'에 "실패"가 뜹니다)
+                try {
+                    await supabase
+                        .from('assessments')
+                        .update({ status: 'failed', error_message: '음성 내용이 없습니다.' })
+                        .eq('id', assessmentId);
+                } catch (dbError) {
+                    console.error("DB 상태 업데이트 실패:", dbError);
+                }
+
+            } else {
+                toast.error("평가 종료 처리 실패", { description: error.message });
+            }
             setIsLoading(false);
+            // --------------------
         }
     };
 
+    // 로딩 UI
     if (isLoading && !assessment) {
         return (
             <div className="w-full flex justify-center items-center p-10">
@@ -190,6 +255,42 @@ export default function RecordPage() {
         );
     }
 
+    // '음성 없음' UI
+    if (isEmptyTranscript) {
+        return (
+            <div className="space-y-6 text-center">
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-destructive">음성 감지 실패</CardTitle>
+                        <CardDescription>녹음된 파일에서 음성 내용을 찾을 수 없거나, 녹음이 너무 짧습니다.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-col md:flex-row gap-4">
+                        <Button
+                            className="w-full md:w-1/2"
+                            size="lg"
+                            onClick={() => window.location.reload()}
+                        >
+                            <RefreshCw className="mr-2 h-5 w-5" />
+                            다시 녹음 시작하기
+                        </Button>
+                        <Button
+                            className="w-full md:w-1/2"
+                            size="lg"
+                            variant="outline"
+                            asChild
+                        >
+                            <Link href={`/companies/${assessment?.company_id}/assessments`}>
+                                <ArrowLeft className="mr-2 h-5 w-5" />
+                                메인 메뉴로 돌아가기
+                            </Link>
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
+    // 메인 녹음 UI
     return (
         <div className="space-y-6">
             <Button variant="outline" size="sm" className="mb-4" asChild>
