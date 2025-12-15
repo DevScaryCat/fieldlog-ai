@@ -5,9 +5,8 @@ import React, { useMemo } from 'react';
 import { DataTable } from '@/components/ui/data-table';
 import { ColumnDef } from '@tanstack/react-table';
 import { FileText } from 'lucide-react';
-import { Badge } from '@/components/ui/badge'; // Badge는 클라이언트에서도 사용 가능
 
-// 1. 서버 컴포넌트에서 넘겨받을 Props 타입 정의
+// 타입 정의
 type TemplateItem = {
     id: string;
     header_name: string | null;
@@ -23,10 +22,9 @@ interface ReportDataTableProps {
     results: AssessmentResult[];
 }
 
-// 2. 이 컴포넌트가 'use client'이므로, 여기서 함수를 정의하는 것은 안전합니다.
 export function ReportDataTable({ templateItems, results }: ReportDataTableProps) {
 
-    // 3. 서버 페이지에 있던 로직을 클라이언트로 이동 (useMemo 사용)
+    // 1. 결과 데이터를 Map으로 정리 (Key: template_item_id, Value: 답변 배열)
     const resultsMap = useMemo(() => {
         const map = new Map<string, string[]>();
         if (results) {
@@ -34,53 +32,66 @@ export function ReportDataTable({ templateItems, results }: ReportDataTableProps
                 if (!map.has(result.template_item_id)) {
                     map.set(result.template_item_id, []);
                 }
-                map.get(result.template_item_id)!.push(result.result_value || '(내용 없음)');
+                // 값이 있으면 추가
+                if (result.result_value) {
+                    map.get(result.template_item_id)!.push(result.result_value);
+                }
             }
         }
         return map;
     }, [results]);
 
-    const resultSetCount = useMemo(() => {
-        return resultsMap.size > 0 ? Math.max(...Array.from(resultsMap.values()).map(v => v.length)) : 0;
+    // 2. AI가 찾아낸 "답변 세트"의 최대 개수 계산 (이것이 곧 '행(Row)'의 개수가 됩니다)
+    const rowCount = useMemo(() => {
+        return resultsMap.size > 0
+            ? Math.max(...Array.from(resultsMap.values()).map(v => v.length))
+            : 0;
     }, [resultsMap]);
 
-    // 4. (핵심) 'columns' 정의가 서버가 아닌 클라이언트 컴포넌트 내부에 있습니다.
+
+    // 3. (핵심 변경) '질문지(Template Items)'를 '컬럼(Column)'으로 만듭니다.
     const columns: ColumnDef<any>[] = useMemo(() => {
-        const cols: ColumnDef<any>[] = [
-            {
-                accessorKey: 'header',
-                header: '평가 항목 (질문지)',
-                // 'cell' 함수가 이제 클라이언트 측에 있으므로 안전합니다.
-                cell: (info) => <div className="font-medium">{info.getValue() as string}</div>
-            }
-        ];
+        // 순서대로 정렬된 템플릿 항목들을 순회하며 컬럼 정의 생성
+        return templateItems.map((item) => ({
+            accessorKey: item.id, // 데이터의 키는 항목의 ID
+            // 헤더 이름 (계층 구조가 있다면 '상위 > 하위' 형태로 보여줄 수도 있음)
+            header: item.header_name || '(이름 없음)',
+            cell: (info) => (
+                <div className="min-h-[20px] w-full h-full flex items-center whitespace-pre-wrap">
+                    {info.getValue() as string || ""}
+                </div>
+            ),
+            minSize: 150, // 컬럼 최소 너비
+        }));
+    }, [templateItems]);
 
-        for (let i = 0; i < resultSetCount; i++) {
-            cols.push({
-                accessorKey: `result_${i + 1}`,
-                header: `AI 분석 결과 #${i + 1}`,
-            });
-        }
-        return cols;
-    }, [resultSetCount]);
 
-    // 5. 'data' 생성 로직도 클라이언트로 이동
+    // 4. (핵심 변경) '답변 세트'를 '데이터 행(Row)'으로 만듭니다.
     const data = useMemo(() => {
-        return templateItems.map(item => {
-            const row: { [key: string]: any } = {
-                header: item.header_name,
-            };
+        const rows = [];
 
-            const itemResults = resultsMap.get(item.id) || [];
-            for (let i = 0; i < resultSetCount; i++) {
-                row[`result_${i + 1}`] = itemResults[i] || <span className="text-muted-foreground">/</span>;
-            }
-            return row;
-        });
-    }, [templateItems, resultsMap, resultSetCount]);
+        // 발견된 세트 수(행 수)만큼 반복
+        for (let i = 0; i < rowCount; i++) {
+            const row: Record<string, string> = {};
 
-    // 6. 데이터가 없을 경우의 UI
-    if (resultSetCount === 0) {
+            // 각 질문(컬럼)에 대해 i번째 답변을 매핑
+            templateItems.forEach((item) => {
+                const answers = resultsMap.get(item.id) || [];
+                // i번째 답변이 없으면 빈 문자열
+                row[item.id] = answers[i] || "";
+            });
+
+            rows.push(row);
+        }
+
+        // 보기 좋게 빈 행 5개 추가 (엑셀 느낌)
+        const emptyRow = {};
+        return [...rows, ...Array(5).fill(emptyRow)];
+    }, [rowCount, templateItems, resultsMap]);
+
+
+    // 데이터가 아예 없을 때 UI
+    if (rowCount === 0 && results.length === 0) {
         return (
             <div className="text-center py-10 rounded-lg bg-slate-950">
                 <FileText size={48} className="mx-auto text-slate-600 mb-4" />
@@ -90,6 +101,13 @@ export function ReportDataTable({ templateItems, results }: ReportDataTableProps
         );
     }
 
-    // 7. 데이터가 있을 경우 DataTable 렌더링
-    return <DataTable columns={columns} data={data} />;
+    // DataTable 렌더링 (가로 스크롤 가능하도록 overflow 설정)
+    return (
+        <div className="border rounded-lg overflow-x-auto">
+            {/* min-w-max를 주어 컬럼이 많을 때 찌그러지지 않고 스크롤되게 함 */}
+            <div className="min-w-max">
+                <DataTable columns={columns} data={data} />
+            </div>
+        </div>
+    );
 }

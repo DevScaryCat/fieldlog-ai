@@ -14,14 +14,13 @@ const supabaseAdmin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("
 // 재귀 함수: AI가 반환한 계층 구조(JSON)를 DB에 맞게 평탄화(flatten)합니다.
 async function insertItemsRecursively(items: any[], templateId: string, parentId: string | null = null) {
   for (const [index, item] of items.entries()) {
-    // 1. 부모 아이템을 DB에 삽입
     const { data: parentItem, error } = await supabaseAdmin
       .from("template_items")
       .insert({
         template_id: templateId,
         header_name: item.header_name,
         default_value: item.default_value || null,
-        parent_id: parentId, // 부모 ID 지정
+        parent_id: parentId,
         sort_order: index,
       })
       .select("id")
@@ -29,7 +28,6 @@ async function insertItemsRecursively(items: any[], templateId: string, parentId
 
     if (error) throw new Error(`DB 삽입 실패 (header: ${item.header_name}): ${error.message}`);
 
-    // 2. 자식 아이템이 있다면, '자신'의 ID를 'parent_id'로 넘겨 재귀 호출
     if (item.children && item.children.length > 0) {
       await insertItemsRecursively(item.children, templateId, parentItem.id);
     }
@@ -41,11 +39,11 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  const { record: template } = await req.json();
-  const templateId = template?.id;
-  const fileUrl = template?.original_file_url;
-
   try {
+    const { record: template } = await req.json();
+    const templateId = template?.id;
+    const fileUrl = template?.original_file_url;
+
     if (!templateId || !fileUrl) {
       throw new Error("Webhook 페이로드에 templateId 또는 fileUrl이 없습니다.");
     }
@@ -57,57 +55,44 @@ Deno.serve(async (req) => {
     const imageBase64 = encode(imageBuffer);
     const imageMediaType = fileData.type || "image/jpeg";
 
-    // 3. 고도화된 새 프롬프트 (계층 구조 요청)
+    // --- (핵심 수정) 범용성을 극대화한 프롬프트 ---
     const prompt = `
-      당신은 이미지 속 표의 구조를 분석하는 AI입니다.
+      당신은 다양한 형태의 문서(표, 체크리스트, 명단 등)를 디지털 양식으로 변환하는 전문가 AI입니다.
+      이미지의 내용을 추측하지 말고, **오직 시각적인 구조(Visual Structure)**에 근거하여 분석하세요.
 
       [핵심 임무]:
-      이미지에 있는 표의 **'계층 구조(Hierarchy)'**를 분석하여 **'중첩된 JSON(Nested JSON)'** 형식으로 추출하세요.
+      이미지에 있는 **'메인 데이터 테이블(Main Data Table)'**을 찾아서, 그 **'컬럼 헤더(Header)' 구조**를 계층적 JSON으로 추출하세요.
 
-      [중요 지시사항]:
-      1.  **회전 처리:** 이미지가 90도 회전되어 있을 수 있습니다. 회전 상태를 보정하여 텍스트를 정확히 읽어주세요.
-      2.  **계층 구조 인식 (가장 중요):**
-          - "유해위험요인 파악" 처럼 여러 하위 컬럼을 가진 헤더는 **'children' 배열**을 가진 부모 노드로 만드세요.
-          - "분류", "원인" 등은 '유해위험요인 파악'의 'children'이 됩니다.
-          - "평가대상 공정"처럼 하위 항목이 없는 단일 컬럼은 'children' 배열을 비워두세요.
-      3.  **기본값 추출:** '유해인자' 컬럼의 '소음'처럼, 이미 채워진 값이 있다면 'default_value'로 추출하세요.
-      4.  **무시할 내용:** 표의 제목, 페이지 번호, 서명란 등은 무시하세요.
+      [판단 규칙 (General Rules)]:
+      1.  **방향 보정:** 이미지가 90도, 180도 회전되어 있거나 기울어져 있을 수 있습니다. 텍스트가 올바르게 읽히는 방향을 기준으로 분석하세요.
+      2.  **헤더 식별 기준:**
+          - 표의 **가장 위쪽(또는 왼쪽)**에 위치하며, 데이터가 아닌 **'항목의 이름'**을 나타내는 셀들을 찾으세요.
+          - 일반적으로 배경색이 있거나, 굵은 글씨이거나, 데이터 행보다 위계가 높습니다.
+          - 예시: "품명", "규격", "수량" (O) / "볼트", "10mm", "5개" (X - 이건 데이터임)
+      3.  **계층 구조 (Hierarchy):**
+          - 셀이 병합(Merge)되어 상위 개념과 하위 개념으로 나뉘는 경우, 이를 **부모-자식(children)** 구조로 표현하세요.
+          - (예: '위험성' 칸 아래에 '빈도'와 '강도' 칸이 있음 -> '위험성'이 부모, '빈도/강도'가 자식)
+      4.  **기본값(Default Value) 처리:**
+          - 헤더 셀 내부에, 또는 헤더 바로 아래에 **"이미 인쇄되어 있는 고정된 값"**이 있다면 'default_value'로 추출하세요.
+          - (예: '단위' 컬럼 아래에 'mm'가 인쇄됨 -> default_value: "mm")
+          - 사용자가 수기로 작성해야 하는 빈칸은 null로 두세요.
+      5.  **제외 대상:**
+          - 표의 제목(Title), 결재란, 날짜/서명란, 페이지 번호 등 **표의 '구조'가 아닌 메타 데이터**는 제외하세요.
 
       [출력 형식]:
       반드시 \`\`\`json ... \`\`\` 블록으로 감싸서 반환하세요.
-      
-      [IMG_5501 기준 올바른 출력 예시]:
+
+      [JSON 구조 예시]:
       \`\`\`json
       {
         "items": [
-          { "header_name": "평가대상 공정", "default_value": null, "children": [] },
-          { "header_name": "세부공정(작업)", "default_value": null, "children": [] },
+          { "header_name": "상위헤더1", "default_value": null, "children": [] },
           { 
-            "header_name": "유해위험요인 파악", 
+            "header_name": "상위헤더2", 
             "default_value": null,
             "children": [
-              { "header_name": "분류", "default_value": null, "children": [] },
-              { "header_name": "원인", "default_value": null, "children": [] },
-              { "header_name": "유해위험요인", "default_value": null, "children": [] }
-            ]
-          },
-          { "header_name": "설비 / 물질", "default_value": null, "children": [] },
-          { "header_name": "현재 안전보건조치(사진 등)", "default_value": null, "children": [] },
-          {
-            "header_name": "현재 위험성",
-            "default_value": null,
-            "children": [
-              { "header_name": "가능성(빈도)", "default_value": null, "children": [] },
-              { "header_name": "중대성[강도]", "default_value": null, "children": [] },
-              { "header_name": "위험성", "default_value": null, "children": [] }
-            ]
-          },
-          {
-            "header_name": "감소대책",
-            "default_value": null,
-            "children": [
-              { "header_name": "No.", "default_value": null, "children": [] },
-              { "header_name": "세부내용", "default_value": null, "children": [] }
+              { "header_name": "하위헤더A", "default_value": "고정값", "children": [] },
+              { "header_name": "하위헤더B", "default_value": null, "children": [] }
             ]
           }
         ]
@@ -115,7 +100,6 @@ Deno.serve(async (req) => {
       \`\`\`
     `;
 
-    // 4. Claude Vision API 호출
     const msg = await anthropic.messages.create({
       model: "claude-sonnet-4-5-20250929",
       max_tokens: 4096,
@@ -130,7 +114,6 @@ Deno.serve(async (req) => {
       ],
     });
 
-    // 5. JSON 파싱
     const responseText = msg.content[0].text;
     const jsonMatch = responseText.match(/```json([\s\S]*?)```/);
 
@@ -150,10 +133,8 @@ Deno.serve(async (req) => {
     const resultJson = JSON.parse(jsonString);
     if (!Array.isArray(resultJson.items)) throw new Error("AI 응답 형식이 잘못되었습니다.");
 
-    // 6. 'template_items'에 "재귀적으로" 삽입 (수정됨)
     await insertItemsRecursively(resultJson.items, templateId, null);
 
-    // 7. 성공! 'assessment_templates' 상태를 'completed'로 업데이트
     await supabaseAdmin
       .from("assessment_templates")
       .update({ status: "completed", error_message: null })
@@ -163,7 +144,6 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {
-    // 8. 실패!
     if (templateId) {
       await supabaseAdmin
         .from("assessment_templates")

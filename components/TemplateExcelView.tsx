@@ -1,4 +1,5 @@
 // /components/TemplateExcelView.tsx
+
 'use client';
 
 import React, { useMemo } from 'react';
@@ -15,14 +16,10 @@ type TemplateItem = {
     parent_id: string | null;
 };
 
-// DataTable이 사용할 '평탄화된' 데이터 타입
-type FlatTemplateItem = {
-    id: string;
-    path: string; // 예: "유해위험요인 파악 > 분류"
-    default_value: string | null;
-};
+// DataTable이 사용할 데이터 타입
+type DynamicRowData = Record<string, string | null>;
 
-// Arborist 트리 데이터 타입 (헬퍼 함수용)
+// Arborist 트리 데이터 타입
 type ArboristNode = {
     id: string;
     name: string;
@@ -46,46 +43,77 @@ function buildTree(items: TemplateItem[], parentId: string | null = null): Arbor
         });
 }
 
-// 2. Arborist 트리 데이터 -> 엑셀 뷰용 평탄화
-function flattenForExcelView(nodes: ArboristNode[], parentPath = ''): FlatTemplateItem[] {
-    let flatList: FlatTemplateItem[] = [];
+// 2. 트리 데이터 -> Dynamic Column/Row 데이터로 변환
+function generateExcelStructure(nodes: ArboristNode[], parentPath = ''): { columns: ColumnDef<DynamicRowData>[], rowData: DynamicRowData } {
+    const columns: ColumnDef<DynamicRowData>[] = [];
+    const rowData: DynamicRowData = {};
 
     for (const node of nodes) {
-        const currentPath = parentPath ? `${parentPath} > ${node.name}` : node.name;
+        const accessorKey = node.id;
+        const headerName = node.name;
 
         if (node.children && node.children.length > 0) {
-            flatList = flatList.concat(flattenForExcelView(node.children, currentPath));
+            const childResult = generateExcelStructure(node.children, headerName);
+            columns.push(...childResult.columns);
+            Object.assign(rowData, childResult.rowData);
         } else {
-            flatList.push({
-                id: node.id,
-                path: currentPath,
-                default_value: node.value,
+            // 2-1. 컬럼 정의 생성
+            columns.push({
+                accessorKey: accessorKey,
+                // 계층 구조를 헤더에 표시 (상위헤더 / 하위헤더)
+                header: (parentPath ? `${parentPath} / ` : '') + headerName,
+                // 셀 렌더링 수정: (비어있음) 텍스트 제거 및 빈 셀 높이 확보
+                cell: ({ row }) => {
+                    const value = row.getValue(accessorKey) as string | null;
+                    return (
+                        <div className="min-h-[20px] w-full h-full flex items-center">
+                            {value || ""}
+                        </div>
+                    );
+                },
+                minSize: 150,
             });
+
+            // 2-2. 첫 번째 행의 데이터 (Default Value) 설정
+            rowData[accessorKey] = node.value;
         }
     }
-    return flatList;
+
+    return { columns, rowData };
 }
 
-// 3. DataTable을 위한 '컬럼' 정의
-const columns: ColumnDef<FlatTemplateItem>[] = [
-    {
-        accessorKey: 'path',
-        header: '평가 항목 (계층 구조)',
-        cell: ({ row }) => <div className="font-medium">{row.getValue('path')}</div>,
-    },
-    {
-        accessorKey: 'default_value',
-        header: '기본값',
-        cell: ({ row }) => row.getValue('default_value') || <span className="text-muted-foreground">(비어있음)</span>,
-    },
-];
-
-// 4. 메인 엑셀 뷰 컴포넌트
+// 3. 메인 엑셀 뷰 컴포넌트
 export function TemplateExcelView({ initialItems }: { initialItems: TemplateItem[] }) {
-    const excelData = useMemo(() => {
-        const tree = buildTree(initialItems);
-        return flattenForExcelView(tree);
-    }, [initialItems]);
 
-    return <DataTable columns={columns} data={excelData} />;
+    const isInitialItemsEmpty = !initialItems || initialItems.length === 0;
+
+    const { columns, excelData } = useMemo(() => {
+        if (isInitialItemsEmpty) {
+            return { columns: [], excelData: [] };
+        }
+
+        const tree = buildTree(initialItems);
+        const { columns: generatedColumns, rowData } = generateExcelStructure(tree);
+
+        // 3-1. 첫 번째 행 (기본값) + 빈 행 5개 생성
+        const emptyRow = {}; // 빈 객체 (모든 값이 undefined)
+        const dataWithPlaceholders = [
+            rowData,              // 1행: AI가 추출한 기본값
+            ...Array(5).fill(emptyRow) // 2~6행: 빈 줄 (미리보기용)
+        ];
+
+        return { columns: generatedColumns, excelData: dataWithPlaceholders };
+    }, [initialItems, isInitialItemsEmpty]);
+
+
+    if (isInitialItemsEmpty) {
+        return <div className="p-4 text-center text-muted-foreground">분석된 평가 항목이 없습니다.</div>;
+    }
+
+    return (
+        <div className="border rounded-lg overflow-hidden">
+            {/* 데이터 테이블 렌더링 */}
+            <DataTable columns={columns} data={excelData} />
+        </div>
+    );
 }
