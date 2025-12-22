@@ -18,10 +18,11 @@ import {
     DialogHeader,
     DialogTitle,
     DialogTrigger,
-} from "@/components/ui/dialog"; // 1. Dialog 임포트
-import { ArrowLeft, Edit, Eye } from 'lucide-react'; // 2. Eye 아이콘 임포트
+} from "@/components/ui/dialog";
+import { ArrowLeft, Edit, Eye } from 'lucide-react';
 import { TemplateEditor } from '@/components/TemplateEditor';
-import { TemplateExcelView } from '@/components/TemplateExcelView'; // 3. 엑셀 뷰 임포트
+import { TemplateExcelView } from '@/components/TemplateExcelView';
+import { TemplateTypeSelector } from '@/components/TemplateTypeSelector';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,10 +33,10 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
     const { data: template, error } = await supabase
         .from('assessment_templates')
         .select(`
-      *,
-      companies (name),
-      template_items (*)
-    `)
+            *,
+            companies (name),
+            template_items (*)
+        `)
         .eq('id', templateId)
         .eq('company_id', companyId)
         .single();
@@ -46,6 +47,7 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
     }
 
     const items = template.template_items || [];
+    const currentAiType = template.ai_type || 'safety';
 
     return (
         <div className="w-full">
@@ -56,19 +58,17 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                 </Link>
             </Button>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-2xl">{template.template_name}</CardTitle>
-                    <CardDescription>
-                        연결된 사업장: {template.companies?.name || '미지정'}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {/* 4. (수정) "엑셀 뷰로 미리보기" 버튼 + Dialog 추가 */}
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-semibold">양식 구조 편집 (트리 뷰)</h3>
-                        <div className="flex gap-2">
-                            {/* 엑셀 뷰 모달 */}
+            <div className="grid gap-6">
+                <Card>
+                    <CardHeader>
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <CardTitle className="text-2xl">{template.template_name}</CardTitle>
+                                <CardDescription className="mt-1">
+                                    연결된 사업장: {template.companies?.name || '미지정'}
+                                </CardDescription>
+                            </div>
+
                             <Dialog>
                                 <DialogTrigger asChild>
                                     <Button variant="outline" size="sm">
@@ -76,7 +76,7 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                                         엑셀 뷰로 미리보기
                                     </Button>
                                 </DialogTrigger>
-                                <DialogContent className="sm:max-w-4xl md:max-w-6xl"> {/* 5. 모달 크기 크게 */}
+                                <DialogContent className="sm:max-w-4xl md:max-w-6xl">
                                     <DialogHeader>
                                         <DialogTitle>{template.template_name}</DialogTitle>
                                         <DialogDescription>
@@ -88,15 +88,25 @@ export default async function TemplateDetailPage({ params }: { params: { id: str
                                     </div>
                                 </DialogContent>
                             </Dialog>
-
-                            {/* 기존 수정하기 버튼 (TemplateEditor가 처리) */}
                         </div>
-                    </div>
+                    </CardHeader>
 
-                    {/* 6. (수정) TemplateEditor를 CardContent 바로 아래로 이동 */}
-                    <TemplateEditor initialItems={items} templateId={template.id} />
-                </CardContent>
-            </Card>
+                    <CardContent className="space-y-6">
+                        {/* [수정] bg-slate-50 -> bg-muted/50 (다크모드 대응) */}
+                        <div className="p-4 bg-muted/50 rounded-lg border">
+                            <TemplateTypeSelector
+                                templateId={template.id}
+                                initialType={currentAiType}
+                            />
+                        </div>
+
+                        <div>
+                            <h3 className="text-lg font-semibold mb-4">양식 구조 편집 (트리 뷰)</h3>
+                            <TemplateEditor initialItems={items} templateId={template.id} />
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 }

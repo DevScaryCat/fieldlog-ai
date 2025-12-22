@@ -39,9 +39,11 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  let templateId = null;
+
   try {
     const { record: template } = await req.json();
-    const templateId = template?.id;
+    templateId = template?.id;
     const fileUrl = template?.original_file_url;
 
     if (!templateId || !fileUrl) {
@@ -55,29 +57,32 @@ Deno.serve(async (req) => {
     const imageBase64 = encode(imageBuffer);
     const imageMediaType = fileData.type || "image/jpeg";
 
-    // --- (핵심 수정) 범용성을 극대화한 프롬프트 ---
+    // --- (프롬프트 수정) 양식 타입 감지 지침 추가 ---
     const prompt = `
-      당신은 다양한 형태의 문서(표, 체크리스트, 명단 등)를 디지털 양식으로 변환하는 전문가 AI입니다.
-      이미지의 내용을 추측하지 말고, **오직 시각적인 구조(Visual Structure)**에 근거하여 분석하세요.
+      당신은 문서 서식 분석 전문가 AI입니다. 
+      이미지의 시각적 구조를 분석하여 '데이터 테이블 구조'와 '문서의 성격(Type)'을 추출하세요.
 
-      [핵심 임무]:
-      이미지에 있는 **'메인 데이터 테이블(Main Data Table)'**을 찾아서, 그 **'컬럼 헤더(Header)' 구조**를 계층적 JSON으로 추출하세요.
+      [목표 1: 구조 추출]
+      - 메인 데이터 테이블의 컬럼 헤더(Header)를 계층적 JSON으로 추출하세요.
+      - 방향 보정, 셀 병합(부모-자식 관계), 기본값(Default Value) 인쇄 여부를 꼼꼼히 확인하세요.
+      - 표의 제목이나 결재란 같은 메타 데이터는 제외하고, 실제 입력할 '항목'만 추출하세요.
 
-      [판단 규칙 (General Rules)]:
-      1.  **방향 보정:** 이미지가 90도, 180도 회전되어 있거나 기울어져 있을 수 있습니다. 텍스트가 올바르게 읽히는 방향을 기준으로 분석하세요.
-      2.  **헤더 식별 기준:**
-          - 표의 **가장 위쪽(또는 왼쪽)**에 위치하며, 데이터가 아닌 **'항목의 이름'**을 나타내는 셀들을 찾으세요.
-          - 일반적으로 배경색이 있거나, 굵은 글씨이거나, 데이터 행보다 위계가 높습니다.
-          - 예시: "품명", "규격", "수량" (O) / "볼트", "10mm", "5개" (X - 이건 데이터임)
-      3.  **계층 구조 (Hierarchy):**
-          - 셀이 병합(Merge)되어 상위 개념과 하위 개념으로 나뉘는 경우, 이를 **부모-자식(children)** 구조로 표현하세요.
-          - (예: '위험성' 칸 아래에 '빈도'와 '강도' 칸이 있음 -> '위험성'이 부모, '빈도/강도'가 자식)
-      4.  **기본값(Default Value) 처리:**
-          - 헤더 셀 내부에, 또는 헤더 바로 아래에 **"이미 인쇄되어 있는 고정된 값"**이 있다면 'default_value'로 추출하세요.
-          - (예: '단위' 컬럼 아래에 'mm'가 인쇄됨 -> default_value: "mm")
-          - 사용자가 수기로 작성해야 하는 빈칸은 null로 두세요.
-      5.  **제외 대상:**
-          - 표의 제목(Title), 결재란, 날짜/서명란, 페이지 번호 등 **표의 '구조'가 아닌 메타 데이터**는 제외하세요.
+      [목표 2: 문서 타입(AI Mode) 감지]
+      이 양식이 어떤 용도로 쓰이는지 헤더 텍스트와 전체적인 구성을 보고 판단하세요.
+      
+      1. **"safety" (안전/보건 컨설팅)**:
+         - 키워드: 위험성, 빈도, 강도, 법적근거, 개선대책, TBM, 순회점검, 유해위험요인 등.
+         - 특징: 안전 관리나 위험성 평가와 관련된 항목이 많음.
+      
+      2. **"meeting" (회의/면담)**:
+         - 키워드: 안건, 회의내용, 참석자, 결정사항, 비고, 일정, Action Item, 논의사항 등.
+         - 특징: 줄글이나 요약 내용을 적는 칸이 넓게 배치된 경우.
+      
+      3. **"inspection" (시설/품질 점검)**:
+         - 키워드: 점검항목, 양호/불량(O/X), 상태, 조치사항, 결과, 부적합, 수리내역 등.
+         - 특징: 체크리스트 형태이거나 O/X를 표시하는 칸이 있는 경우.
+
+      - 위 3가지 중 하나로 분류하고, 헷갈리면 기본값인 "safety"로 지정하세요.
 
       [출력 형식]:
       반드시 \`\`\`json ... \`\`\` 블록으로 감싸서 반환하세요.
@@ -86,18 +91,13 @@ Deno.serve(async (req) => {
       \`\`\`json
       {
         "items": [
-          { "header_name": "상위헤더1", "default_value": null, "children": [] },
-          { 
-            "header_name": "상위헤더2", 
-            "default_value": null,
-            "children": [
-              { "header_name": "하위헤더A", "default_value": "고정값", "children": [] },
-              { "header_name": "하위헤더B", "default_value": null, "children": [] }
-            ]
-          }
-        ]
+          { "header_name": "구분", "default_value": null, "children": [] },
+          { "header_name": "점검내용", "children": [ ... ] }
+        ],
+        "detected_type": "safety" 
       }
       \`\`\`
+      (detected_type 값은 "safety", "meeting", "inspection" 중 하나여야 함)
     `;
 
     const msg = await anthropic.messages.create({
@@ -133,14 +133,24 @@ Deno.serve(async (req) => {
     const resultJson = JSON.parse(jsonString);
     if (!Array.isArray(resultJson.items)) throw new Error("AI 응답 형식이 잘못되었습니다.");
 
+    // 1. 아이템 재귀 삽입
     await insertItemsRecursively(resultJson.items, templateId, null);
+
+    // 2. 템플릿 상태 업데이트 (detected_type도 같이 저장!)
+    // 감지된 타입이 유효하지 않으면 기본값 'safety' 사용
+    const validTypes = ["safety", "meeting", "inspection"];
+    const aiTypeToSave = validTypes.includes(resultJson.detected_type) ? resultJson.detected_type : "safety";
 
     await supabaseAdmin
       .from("assessment_templates")
-      .update({ status: "completed", error_message: null })
+      .update({
+        status: "completed",
+        error_message: null,
+        ai_type: aiTypeToSave, // [추가됨] 감지된 타입 저장
+      })
       .eq("id", templateId);
 
-    return new Response(JSON.stringify({ message: "Success" }), {
+    return new Response(JSON.stringify({ message: "Success", detected_type: aiTypeToSave }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {

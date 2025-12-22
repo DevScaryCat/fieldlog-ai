@@ -3,11 +3,11 @@
 import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
-import { ArrowLeft, Camera, Eye } from 'lucide-react'; // Eye 아이콘 임포트
+import { ArrowLeft, Camera, Eye, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import Link from 'next/link';
-import { ReportDataTable } from '@/components/ReportDataTable'; // 1. ReportDataTable 임포트
+import { ReportDataTable } from '@/components/ReportDataTable';
 import {
     Dialog,
     DialogContent,
@@ -15,7 +15,8 @@ import {
     DialogHeader,
     DialogTitle,
     DialogTrigger,
-} from "@/components/ui/dialog"; // 2. Dialog 임포트
+} from "@/components/ui/dialog";
+import { DeleteAssessmentButton } from '@/components/DeleteAssessmentButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,124 +24,181 @@ export default async function ReportPage({ params }: { params: { id: string } })
     const { id: assessmentId } = await params;
     const supabase = await createClient();
 
+    // 1. 데이터 조회 (Small AI 결과 포함)
+    // [중요] select 문자열 내부에 주석(//)을 넣으면 파싱 에러가 발생하므로 제거했습니다.
     const { data: assessment, error } = await supabase
         .from('assessments')
         .select(`
-      *,
-      companies (name),
-      assessment_templates ( 
-        template_name, 
-        template_items (id, header_name, sort_order, parent_id) 
-      ),
-      findings (id, photo_before_url, timestamp_seconds),
-      assessment_results ( template_item_id, result_value )
-    `)
+            *,
+            companies (name),
+            assessment_templates ( 
+                template_name,
+                ai_type,
+                template_items (id, header_name, sort_order, parent_id) 
+            ),
+            findings (id, photo_before_url, timestamp_seconds),
+            assessment_results ( template_item_id, result_value, legal_basis, solution )
+        `)
         .eq('id', assessmentId)
         .single();
 
     if (error || !assessment) {
-        console.error('Error fetching report data:', error);
+        console.error("Error fetching assessment:", error);
         return notFound();
     }
 
     const { companies: company, assessment_templates: template, findings, assessment_results: results } = assessment;
+    const templateItems = template?.template_items?.sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0)) || [];
 
-    const templateItems = template?.template_items?.sort(
-        (a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0)
-    ) || [];
+    // 가져온 템플릿 정보에서 ai_type 추출 (없으면 safety가 기본)
+    const aiType = template?.ai_type || 'safety';
+
+    // --- [누락 항목 분석 로직] ---
+    const filledItemIds = new Set(results?.map((r: any) => r.template_item_id));
+    const missingItems = templateItems.filter((item: any) => !filledItemIds.has(item.id));
+
+    const totalCount = templateItems.length;
+    const filledCount = totalCount - missingItems.length;
+    const progress = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 0;
+    // -------------------------
 
     return (
-        <div className="w-full">
-            <Button variant="outline" size="sm" className="mb-4" asChild>
-                <Link href={`/companies/${assessment.company_id}/assessments`}>
-                    <ArrowLeft className="mr-2 h-4 w-4" />
-                    평가 이력으로 돌아가기
-                </Link>
-            </Button>
+        <div className="w-full pb-20">
+            {/* 상단 네비게이션 및 액션 바 */}
+            <div className="flex items-center justify-between mb-4">
+                <Button variant="outline" size="sm" asChild>
+                    <Link href={`/companies/${assessment.company_id}/assessments`}>
+                        <ArrowLeft className="mr-2 h-4 w-4" />
+                        평가 이력으로 돌아가기
+                    </Link>
+                </Button>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-3xl font-bold">{company?.name || '사업장'}</CardTitle>
-                    <CardDescription className="text-lg">
-                        {template?.template_name || '위험성 평가 보고서'}
-                    </CardDescription>
-                    <p className="text-sm text-muted-foreground pt-2">
-                        평가일: {new Date(assessment.assessment_date).toLocaleDateString()}
-                    </p>
-                </CardHeader>
-                <CardContent className="space-y-10">
+                {/* 보고서 삭제 버튼 */}
+                <DeleteAssessmentButton
+                    assessmentId={assessment.id}
+                    companyId={assessment.company_id}
+                />
+            </div>
 
-                    <div>
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-2xl font-semibold">AI 자동 분석 결과</h3>
-                            {/* 3. (핵심) "엑셀 뷰" 모달 버튼 */}
+            <div className="grid gap-6">
+                {/* 1. 상단 요약 카드 (제목 & 진행률) */}
+                <Card>
+                    <CardHeader>
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                {/* 자동 생성된 제목 표시 (없으면 템플릿 이름) */}
+                                <CardTitle className="text-2xl font-bold">
+                                    {assessment.title || template?.template_name || '위험성 평가 보고서'}
+                                </CardTitle>
+                                <CardDescription className="text-lg mt-1">
+                                    {company?.name} | {new Date(assessment.assessment_date).toLocaleDateString()}
+                                </CardDescription>
+                                {/* [선택 사항] 현재 어떤 모드로 분석되었는지 작게 표시 */}
+                                <div className="mt-2 inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-600">
+                                    {aiType === 'meeting' ? '📝 회의록 모드' : '🚧 안전점검 모드'}
+                                </div>
+                            </div>
+                            <div className="min-w-[200px] text-right">
+                                <span className="text-sm text-muted-foreground mb-1 block">항목 작성률</span>
+                                <div className="flex items-center gap-2">
+                                    <div className="h-2 flex-1 bg-slate-100 rounded-full overflow-hidden">
+                                        <div
+                                            className={`h-full ${progress === 100 ? 'bg-green-500' : 'bg-blue-600'}`}
+                                            style={{ width: `${progress}%` }}
+                                        />
+                                    </div>
+                                    <span className="font-bold">{progress}%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </CardHeader>
+
+                    <CardContent className="space-y-6">
+                        {/* 누락 항목 경고창 */}
+                        {missingItems.length > 0 ? (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                                <div className="flex items-center gap-2 text-yellow-800 font-semibold mb-2">
+                                    <AlertTriangle className="h-5 w-5" />
+                                    <span>작성되지 않은 항목이 {missingItems.length}개 있습니다.</span>
+                                </div>
+                                <ul className="list-disc list-inside text-sm text-yellow-700 space-y-1 ml-1">
+                                    {missingItems.map((item: any) => (
+                                        <li key={item.id}>{item.header_name}</li>
+                                    ))}
+                                </ul>
+                                <p className="text-xs text-yellow-600 mt-2">
+                                    * 해당 내용은 녹음 대본에서 감지되지 않았습니다. 추가 인터뷰가 필요할 수 있습니다.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="bg-green-50 border border-green-200 rounded-md p-4 flex items-center gap-2 text-green-800">
+                                <CheckCircle2 className="h-5 w-5" />
+                                <span className="font-semibold">모든 평가 항목이 작성되었습니다. 완벽합니다!</span>
+                            </div>
+                        )}
+
+                        <div className="flex justify-between items-center pt-4 border-t">
+                            <h3 className="text-xl font-semibold">AI 자동 분석 상세</h3>
                             <Dialog>
                                 <DialogTrigger asChild>
-                                    <Button variant="outline">
+                                    <Button variant="default">
                                         <Eye className="mr-2 h-4 w-4" />
-                                        엑셀 뷰로 열기
+                                        전체 결과 보기 (엑셀 뷰 & AI 솔루션)
                                     </Button>
                                 </DialogTrigger>
-                                <DialogContent className="sm:max-w-4xl md:max-w-6xl">
+                                <DialogContent className="sm:max-w-4xl md:max-w-6xl w-[95vw] h-[80vh]">
                                     <DialogHeader>
-                                        <DialogTitle>{template?.template_name || '분석 결과'}</DialogTitle>
+                                        <DialogTitle>{assessment.title || template?.template_name}</DialogTitle>
                                         <DialogDescription>
-                                            AI가 대본을 분석하여 {company?.name}의 양식을 자동으로 채운 결과입니다.
+                                            {aiType === 'meeting'
+                                                ? "AI가 분석한 회의 논의 내용 및 향후 계획입니다."
+                                                : "AI가 분석한 현장 상황, 법적 근거, 개선 솔루션입니다."}
                                         </DialogDescription>
                                     </DialogHeader>
-                                    <div className="max-h-[70vh] overflow-y-auto p-4">
-                                        {/* 4. 모달 안에 ReportDataTable 렌더링 */}
+                                    <div className="flex-1 overflow-auto p-1">
                                         <ReportDataTable
                                             templateItems={templateItems}
                                             results={results || []}
+                                            aiType={aiType}
                                         />
                                     </div>
                                 </DialogContent>
                             </Dialog>
                         </div>
-                        {/* 5. 페이지 본문에는 간단한 요약이나 사진만 남김 */}
-                        <p className="text-muted-foreground">
-                            총 {results?.length || 0}개의 분석 항목과 {findings?.length || 0}개의 현장 사진이 발견되었습니다.
-                            자세한 내용은 '엑셀 뷰로 열기' 버튼을 클릭하세요.
-                        </p>
-                    </div>
+                    </CardContent>
+                </Card>
 
-                    <div>
-                        <h3 className="text-2xl font-semibold mb-4">첨부된 현장 사진</h3>
+                {/* 2. 사진 카드 */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>현장 사진 ({findings?.length || 0})</CardTitle>
+                    </CardHeader>
+                    <CardContent>
                         {findings && findings.length > 0 ? (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 {findings.map((finding: any) => {
                                     const { data: { publicUrl } } = supabase.storage.from('findings').getPublicUrl(finding.photo_before_url!);
                                     return (
-                                        <div key={finding.id} className="rounded-lg border overflow-hidden">
-                                            <div className="relative w-full h-80">
-                                                <Image
-                                                    src={publicUrl}
-                                                    alt="현장 사진"
-                                                    fill
-                                                    className="object-cover bg-slate-800"
-                                                />
-                                            </div>
-                                            <div className="p-4 bg-muted/50">
-                                                <p className="text-sm text-muted-foreground">
-                                                    촬영 시점: (Timestamp: {finding.timestamp_seconds})
-                                                </p>
-                                            </div>
+                                        <div key={finding.id} className="relative aspect-video rounded-lg overflow-hidden border bg-black">
+                                            <Image
+                                                src={publicUrl}
+                                                alt="현장 사진"
+                                                fill
+                                                className="object-contain"
+                                            />
                                         </div>
                                     );
                                 })}
                             </div>
                         ) : (
-                            <div className="text-center py-10 rounded-lg bg-slate-950">
-                                <Camera size={48} className="mx-auto text-slate-600 mb-4" />
-                                <h3 className="text-xl font-semibold text-white">데이터 없음</h3>
-                                <p className="text-slate-400 mt-2">이 평가에 대해 첨부된 사진이 없습니다.</p>
+                            <div className="text-center py-8 text-muted-foreground">
+                                <Camera className="mx-auto h-10 w-10 mb-2 opacity-20" />
+                                <p>등록된 사진이 없습니다.</p>
                             </div>
                         )}
-                    </div>
-
-                </CardContent>
-            </Card>
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 }
