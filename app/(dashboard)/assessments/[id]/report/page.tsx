@@ -1,5 +1,3 @@
-// /app/(dashboard)/assessments/[id]/report/page.tsx
-
 import { createClient } from '@/utils/supabase/server';
 import { notFound } from 'next/navigation';
 import Image from 'next/image';
@@ -17,16 +15,15 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 import { DeleteAssessmentButton } from '@/components/DeleteAssessmentButton';
-import { ExcelDownloadButton } from '@/components/ExcelDownloadButton'; // [추가] 엑셀 버튼 임포트
+import { ExcelDownloadButton } from '@/components/ExcelDownloadButton';
+import { GoogleDocsButton } from '@/components/GoogleDocsButton'; // [추가] 구글 버튼 임포트
 
 export const dynamic = 'force-dynamic';
 
 export default async function ReportPage({ params }: { params: { id: string } }) {
-    // Next.js 15+ 대응: await params
     const { id: assessmentId } = await params;
     const supabase = await createClient();
 
-    // 1. 데이터 조회 (주석 제거됨)
     const { data: assessment, error } = await supabase
         .from('assessments')
         .select(`
@@ -53,18 +50,15 @@ export default async function ReportPage({ params }: { params: { id: string } })
 
     const aiType = template?.ai_type || 'safety';
 
-    // --- [누락 항목 분석 로직] ---
     const filledItemIds = new Set(results?.map((r: any) => r.template_item_id));
     const missingItems = templateItems.filter((item: any) => !filledItemIds.has(item.id));
 
     const totalCount = templateItems.length;
     const filledCount = totalCount - missingItems.length;
     const progress = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 0;
-    // -------------------------
 
     return (
         <div className="w-full pb-20">
-            {/* 상단 네비게이션 및 액션 바 */}
             <div className="flex items-center justify-between mb-4">
                 <Button variant="outline" size="sm" asChild>
                     <Link href={`/companies/${assessment.company_id}/assessments`}>
@@ -73,7 +67,6 @@ export default async function ReportPage({ params }: { params: { id: string } })
                     </Link>
                 </Button>
 
-                {/* 보고서 삭제 버튼 */}
                 <DeleteAssessmentButton
                     assessmentId={assessment.id}
                     companyId={assessment.company_id}
@@ -81,7 +74,6 @@ export default async function ReportPage({ params }: { params: { id: string } })
             </div>
 
             <div className="grid gap-6">
-                {/* 1. 상단 요약 카드 (제목 & 진행률) */}
                 <Card>
                     <CardHeader>
                         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -112,7 +104,6 @@ export default async function ReportPage({ params }: { params: { id: string } })
                     </CardHeader>
 
                     <CardContent className="space-y-6">
-                        {/* 누락 항목 경고창 */}
                         {missingItems.length > 0 ? (
                             <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-900 rounded-md p-4">
                                 <div className="flex items-center gap-2 text-yellow-800 dark:text-yellow-500 font-semibold mb-2">
@@ -138,8 +129,11 @@ export default async function ReportPage({ params }: { params: { id: string } })
                         <div className="flex justify-between items-center pt-4 border-t">
                             <h3 className="text-xl font-semibold">AI 자동 분석 상세</h3>
 
-                            {/* [수정] 버튼 그룹 (엑셀 다운로드 + 결과 보기) */}
+                            {/* 버튼 그룹 (구글 닥스 + 엑셀 + 전체보기) */}
                             <div className="flex gap-2">
+                                {/* [추가됨] 구글 닥스 내보내기 버튼 */}
+                                <GoogleDocsButton assessmentId={assessment.id} />
+
                                 <ExcelDownloadButton
                                     title={assessment.title || "평가결과"}
                                     headers={templateItems}
@@ -176,7 +170,6 @@ export default async function ReportPage({ params }: { params: { id: string } })
                     </CardContent>
                 </Card>
 
-                {/* 2. 사진 카드 */}
                 <Card>
                     <CardHeader>
                         <CardTitle>현장 사진 ({findings?.length || 0})</CardTitle>
